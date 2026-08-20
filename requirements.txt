@@ -1,0 +1,4 @@
+# Runtime dependency for the local dashboard host (app.py).
+# The simulator, codec, engine, consumer, and tests use only the Python
+# standard library — no third-party packages required for those.
+flask>=3.0

@@ -1,0 +1,145 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  CME MDP 3.0 SBE schema (faithful working subset).
+
+  This is a hand-authored subset of CME's official templates_FixBinary.xml,
+  covering exactly the messages this simulator emits. The codec (sbe.py) is
+  schema-driven: for bit-for-bit production parity you can replace this file
+  with CME's official templates_FixBinary.xml and the codec adapts.
+
+  Key CME conventions encoded here:
+    * Little-endian byte order.
+    * SBE message header = blockLength(u16) templateId(u16) schemaId(u16) version(u16).
+    * Repeating-group dimension "groupSize" = blockLength(u16) numInGroup(u8)  [3 bytes].
+    * Prices are Decimal with constant exponent -7 (mantissa is int64 on the wire).
+-->
+<sbe:messageSchema xmlns:sbe="http://fixprotocol.io/2016/sbe"
+                   package="mdp3" id="1" version="13" semanticVersion="FIX5SP2"
+                   byteOrder="littleEndian">
+  <types>
+    <!-- SBE message header -->
+    <composite name="messageHeader" description="SBE message header">
+      <type name="blockLength" primitiveType="uint16"/>
+      <type name="templateId"  primitiveType="uint16"/>
+      <type name="schemaId"    primitiveType="uint16"/>
+      <type name="version"     primitiveType="uint16"/>
+    </composite>
+
+    <!-- CME repeating-group dimension (note: numInGroup is uint8, not the SBE default uint16) -->
+    <composite name="groupSize" description="Repeating group dimension">
+      <type name="blockLength" primitiveType="uint16"/>
+      <type name="numInGroup"  primitiveType="uint8"/>
+    </composite>
+
+    <!-- Price: signed int64 mantissa, constant exponent -7 -->
+    <composite name="PRICE" description="Decimal, exponent -7">
+      <type name="mantissa" primitiveType="int64"/>
+      <type name="exponent" primitiveType="int8" presence="constant">-7</type>
+    </composite>
+    <composite name="PRICENULL" description="Optional decimal, exponent -7">
+      <type name="mantissa" primitiveType="int64" presence="optional" nullValue="9223372036854775807"/>
+      <type name="exponent" primitiveType="int8" presence="constant">-7</type>
+    </composite>
+
+    <type name="uInt64"  primitiveType="uint64"/>
+    <type name="Int32"   primitiveType="int32"/>
+    <type name="uInt32"  primitiveType="uint32"/>
+    <type name="uInt8"   primitiveType="uint8"/>
+    <type name="Int8"    primitiveType="int8"/>
+    <type name="LocalMktDate" primitiveType="uint16"/>
+
+    <!-- Enumerations -->
+    <enum name="MDUpdateAction" encodingType="uint8">
+      <validValue name="New">0</validValue>
+      <validValue name="Change">1</validValue>
+      <validValue name="Delete">2</validValue>
+      <validValue name="DeleteThru">3</validValue>
+      <validValue name="DeleteFrom">4</validValue>
+      <validValue name="Overlay">5</validValue>
+    </enum>
+
+    <enum name="MDEntryType" encodingType="char">
+      <validValue name="Bid">0</validValue>
+      <validValue name="Offer">1</validValue>
+      <validValue name="Trade">2</validValue>
+      <validValue name="OpenPrice">4</validValue>
+      <validValue name="SettlementPrice">6</validValue>
+      <validValue name="TradeVolume">B</validValue>
+    </enum>
+
+    <enum name="AggressorSide" encodingType="uint8">
+      <validValue name="NoAggressor">0</validValue>
+      <validValue name="Buy">1</validValue>
+      <validValue name="Sell">2</validValue>
+    </enum>
+
+    <enum name="SecurityTradingStatus" encodingType="uint8">
+      <validValue name="TradingHalt">2</validValue>
+      <validValue name="Close">4</validValue>
+      <validValue name="NewPriceIndication">15</validValue>
+      <validValue name="ReadyToTrade">17</validValue>
+      <validValue name="NotAvailableForTrading">18</validValue>
+      <validValue name="PreOpen">21</validValue>
+    </enum>
+
+    <!-- MatchEventIndicator bit set -->
+    <set name="MatchEventIndicator" encodingType="uint8">
+      <choice name="LastTradeMsg">0</choice>
+      <choice name="LastVolumeMsg">1</choice>
+      <choice name="LastQuoteMsg">2</choice>
+      <choice name="LastStatsMsg">3</choice>
+      <choice name="LastImpliedMsg">4</choice>
+      <choice name="RecoveryMsg">5</choice>
+      <choice name="Reserved">6</choice>
+      <choice name="EndOfEvent">7</choice>
+    </set>
+  </types>
+
+  <!-- ================= Messages ================= -->
+
+  <!-- Template 46: Market Data Incremental Refresh Book (MBP) -->
+  <sbe:message name="MDIncrementalRefreshBook" id="46" blockLength="11">
+    <field name="transactTime"        id="60"   type="uInt64"               offset="0"/>
+    <field name="matchEventIndicator" id="5799" type="MatchEventIndicator"  offset="8"/>
+    <!-- offsets 9-10 are padding to blockLength 11 -->
+    <group name="MDEntries" id="268" dimensionType="groupSize" blockLength="32">
+      <field name="mdEntryPx"      id="270"  type="PRICENULL"      offset="0"/>
+      <field name="mdEntrySize"    id="271"  type="Int32"          offset="8"/>
+      <field name="securityId"     id="48"   type="Int32"          offset="12"/>
+      <field name="rptSeq"         id="83"   type="uInt32"         offset="16"/>
+      <field name="numberOfOrders" id="346"  type="Int32"          offset="20"/>
+      <field name="mdPriceLevel"   id="1023" type="uInt8"          offset="24"/>
+      <field name="mdUpdateAction" id="279"  type="MDUpdateAction" offset="25"/>
+      <field name="mdEntryType"    id="269"  type="MDEntryType"    offset="26"/>
+      <!-- offsets 27-31 padding to entry blockLength 32 -->
+    </group>
+  </sbe:message>
+
+  <!-- Template 48: Market Data Incremental Refresh Trade Summary -->
+  <sbe:message name="MDIncrementalRefreshTradeSummary" id="48" blockLength="11">
+    <field name="transactTime"        id="60"   type="uInt64"              offset="0"/>
+    <field name="matchEventIndicator" id="5799" type="MatchEventIndicator" offset="8"/>
+    <group name="MDEntries" id="268" dimensionType="groupSize" blockLength="32">
+      <field name="mdEntryPx"      id="270"  type="PRICE"          offset="0"/>
+      <field name="mdEntrySize"    id="271"  type="Int32"          offset="8"/>
+      <field name="securityId"     id="48"   type="Int32"          offset="12"/>
+      <field name="rptSeq"         id="83"   type="uInt32"         offset="16"/>
+      <field name="numberOfOrders" id="346"  type="Int32"          offset="20"/>
+      <field name="aggressorSide"  id="5797" type="AggressorSide"  offset="24"/>
+      <field name="mdUpdateAction" id="279"  type="MDUpdateAction" offset="25"/>
+      <field name="mdEntryType"    id="269"  type="MDEntryType"    offset="26"/>
+      <!-- offsets 27-31 padding to entry blockLength 32 -->
+    </group>
+  </sbe:message>
+
+  <!-- Template 30: Security Status -->
+  <sbe:message name="SecurityStatus" id="30" blockLength="30">
+    <field name="transactTime"          id="60"   type="uInt64"                offset="0"/>
+    <field name="securityGroup"          id="1151" type="uInt64"                offset="8"/>
+    <field name="securityId"             id="48"   type="Int32"                 offset="16"/>
+    <field name="tradeDate"              id="75"   type="LocalMktDate"          offset="20"/>
+    <field name="matchEventIndicator"    id="5799" type="MatchEventIndicator"   offset="22"/>
+    <field name="securityTradingStatus"  id="326"  type="SecurityTradingStatus" offset="23"/>
+    <!-- offsets 24-29 padding to blockLength 30 -->
+  </sbe:message>
+</sbe:messageSchema>

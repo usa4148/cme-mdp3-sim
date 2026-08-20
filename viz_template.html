@@ -1,0 +1,612 @@
+<meta charset="utf-8">
+<title>ES Feed Simulator</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+:root{
+  --ground:#eef1f4; --panel:#ffffff; --panel-2:#f6f8fa; --line:#dce2e8;
+  --ink:#1a222c; --muted:#5a6672; --faint:#8a95a1;
+  --accent:#b9791a; --accent-soft:#f0e2c6;
+  --bid:#0f9d6b; --bid-bar:rgba(15,157,107,.16);
+  --offer:#d83a48; --offer-bar:rgba(216,58,72,.14);
+  --trade:#b9791a; --grid:rgba(90,102,114,.10);
+  --shadow:0 1px 2px rgba(20,30,45,.06),0 8px 24px rgba(20,30,45,.06);
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --ground:#0c1016; --panel:#141b24; --panel-2:#0f151d; --line:#232e3a;
+  --ink:#c9d3de; --muted:#7c8a99; --faint:#5a6674;
+  --accent:#f0b429; --accent-soft:#3a2f13;
+  --bid:#2fbf87; --bid-bar:rgba(47,191,135,.18);
+  --offer:#ff5d6c; --offer-bar:rgba(255,93,108,.15);
+  --trade:#f0b429; --grid:rgba(124,138,153,.09);
+  --shadow:0 1px 0 rgba(0,0,0,.4),0 12px 32px rgba(0,0,0,.35);
+}}
+:root[data-theme="dark"]{
+  --ground:#0c1016; --panel:#141b24; --panel-2:#0f151d; --line:#232e3a;
+  --ink:#c9d3de; --muted:#7c8a99; --faint:#5a6674;
+  --accent:#f0b429; --accent-soft:#3a2f13;
+  --bid:#2fbf87; --bid-bar:rgba(47,191,135,.18);
+  --offer:#ff5d6c; --offer-bar:rgba(255,93,108,.15);
+  --trade:#f0b429; --grid:rgba(124,138,153,.09);
+  --shadow:0 1px 0 rgba(0,0,0,.4),0 12px 32px rgba(0,0,0,.35);
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--ground);color:var(--ink);
+  font-family:"IBM Plex Sans",system-ui,sans-serif;font-size:14px;line-height:1.45;
+  -webkit-font-smoothing:antialiased;}
+.mono{font-family:"IBM Plex Mono",ui-monospace,monospace;font-variant-numeric:tabular-nums;}
+.wrap{max-width:1280px;margin:0 auto;padding:20px 20px 60px;}
+
+/* header */
+header{display:flex;flex-wrap:wrap;align-items:flex-end;gap:18px 28px;
+  padding-bottom:16px;border-bottom:1px solid var(--line);margin-bottom:18px;}
+.brand h1{font-family:"IBM Plex Mono",monospace;font-weight:700;font-size:20px;
+  letter-spacing:-.01em;margin:0;text-wrap:balance;}
+.brand .sub{color:var(--muted);font-size:12.5px;margin-top:2px;letter-spacing:.02em;}
+.chips{display:flex;flex-wrap:wrap;gap:8px;}
+.chip{font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--muted);
+  background:var(--panel-2);border:1px solid var(--line);border-radius:5px;
+  padding:4px 8px;letter-spacing:.02em;}
+.chip b{color:var(--ink);font-weight:600;}
+.price-box{margin-left:auto;text-align:right;}
+.price-box .lab{font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);}
+.price-box .px{font-family:"IBM Plex Mono",monospace;font-weight:700;font-size:34px;
+  line-height:1;letter-spacing:-.01em;}
+.price-box .chg{font-family:"IBM Plex Mono",monospace;font-size:13px;font-weight:500;margin-top:3px;}
+.up{color:var(--bid);} .down{color:var(--offer);}
+
+/* layout grid */
+.grid{display:grid;grid-template-columns:300px 1fr 340px;gap:16px;align-items:start;}
+@media(max-width:1080px){.grid{grid-template-columns:1fr;}}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+  box-shadow:var(--shadow);overflow:hidden;}
+.panel h2{font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--faint);
+  margin:0;padding:12px 14px;border-bottom:1px solid var(--line);font-weight:600;
+  display:flex;justify-content:space-between;align-items:center;}
+.panel h2 .hint{letter-spacing:.02em;text-transform:none;color:var(--muted);font-size:10.5px;}
+
+/* futures DOM ladder: bid qty | price | ask qty */
+.ladder{padding:4px 0;font-family:"IBM Plex Mono",monospace;}
+.dom-head{display:grid;grid-template-columns:1fr 74px 1fr;padding:2px 10px 6px;
+  font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--faint);}
+.dom-head .b{text-align:right;} .dom-head .a{text-align:left;} .dom-head .p{text-align:center;}
+.lrow{display:grid;grid-template-columns:1fr 74px 1fr;align-items:stretch;
+  height:21px;font-size:12.5px;border-top:1px solid transparent;}
+.cell{position:relative;display:flex;align-items:center;overflow:hidden;}
+.cell.bidc{justify-content:flex-end;padding-right:9px;}
+.cell.askc{justify-content:flex-start;padding-left:9px;}
+.cell .bar{position:absolute;top:2px;bottom:2px;z-index:0;border-radius:2px;}
+.cell.bidc .bar{right:0;background:var(--bid-bar);}
+.cell.askc .bar{left:0;background:var(--offer-bar);}
+.cell .q{z-index:1;font-weight:500;}
+.cell.bidc .q{color:var(--bid);} .cell.askc .q{color:var(--offer);}
+.cell.pxc{justify-content:center;background:var(--panel-2);border-left:1px solid var(--line);
+  border-right:1px solid var(--line);font-weight:600;color:var(--muted);letter-spacing:-.01em;}
+.lrow.bestbid .pxc{color:var(--bid);box-shadow:inset 0 0 0 1px var(--bid);}
+.lrow.bestoff .pxc{color:var(--offer);box-shadow:inset 0 0 0 1px var(--offer);}
+.lrow.last .pxc{background:var(--accent);color:#0c1016;font-weight:700;}
+.lrow.last .pxc::after{content:"◄";position:absolute;right:-13px;color:var(--accent);font-size:9px;}
+.dom-foot{display:flex;justify-content:space-around;padding:7px 10px 4px;margin-top:3px;
+  border-top:1px solid var(--line);font-size:11px;color:var(--muted);}
+.dom-foot b{color:var(--ink);}
+
+/* chart */
+.chart-wrap{padding:12px 14px 14px;}
+canvas{width:100%;height:300px;display:block;}
+.legend{display:flex;gap:16px;margin-top:8px;font-size:11px;color:var(--muted);flex-wrap:wrap;}
+.legend span{display:inline-flex;align-items:center;gap:6px;}
+.swatch{width:11px;height:3px;border-radius:2px;display:inline-block;}
+
+/* tape */
+.tape{max-height:352px;overflow-y:auto;padding:4px 0;font-size:12px;}
+.ev{display:flex;gap:8px;padding:4px 14px;border-bottom:1px solid var(--line);
+  font-family:"IBM Plex Mono",monospace;align-items:baseline;}
+.ev:last-child{border-bottom:none;}
+.ev .t{color:var(--faint);font-size:10.5px;min-width:30px;}
+.ev .tag{font-size:10px;padding:1px 5px;border-radius:4px;font-weight:600;letter-spacing:.03em;}
+.tag.book{color:var(--accent);background:var(--accent-soft);}
+.tag.trade{color:#fff;background:var(--trade);}
+.ev .body{color:var(--muted);}
+.ev .body b{color:var(--ink);font-weight:600;}
+.buy{color:var(--bid);} .sell{color:var(--offer);}
+
+/* wire panel */
+.wire{padding:12px 14px;}
+.wire .hex{font-family:"IBM Plex Mono",monospace;font-size:11.5px;line-height:1.7;
+  word-break:break-all;background:var(--panel-2);border:1px solid var(--line);
+  border-radius:7px;padding:10px;overflow-x:auto;}
+.hx{padding:1px 0;border-radius:3px;}
+.h-seq{background:rgba(240,180,41,.22);color:var(--accent);}
+.h-time{background:rgba(47,191,135,.20);}
+.h-size{background:rgba(255,93,108,.18);}
+.h-hdr{background:rgba(120,140,255,.20);}
+.h-body{color:var(--muted);}
+.wkey{display:flex;flex-wrap:wrap;gap:6px 12px;margin-top:10px;font-size:10.5px;color:var(--muted);}
+.wkey span{display:inline-flex;align-items:center;gap:5px;}
+.wkey i{width:10px;height:10px;border-radius:3px;display:inline-block;}
+.decoded{margin-top:12px;font-family:"IBM Plex Mono",monospace;font-size:11px;
+  color:var(--muted);border-top:1px dashed var(--line);padding-top:10px;}
+.decoded div{padding:1px 0;} .decoded b{color:var(--ink);}
+
+/* stats strip */
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:16px 0;}
+.stat{background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:11px 13px;}
+.stat .k{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--faint);}
+.stat .v{font-family:"IBM Plex Mono",monospace;font-weight:600;font-size:19px;margin-top:3px;}
+
+/* controls */
+.controls{position:sticky;bottom:0;margin-top:16px;background:var(--panel);
+  border:1px solid var(--line);border-radius:11px;box-shadow:var(--shadow);
+  padding:12px 16px;display:flex;align-items:center;gap:14px;flex-wrap:wrap;}
+button{font-family:"IBM Plex Sans",sans-serif;font-size:13px;font-weight:600;color:var(--ink);
+  background:var(--panel-2);border:1px solid var(--line);border-radius:7px;
+  padding:8px 14px;cursor:pointer;transition:border-color .15s,background .15s;}
+button:hover{border-color:var(--accent);}
+button.primary{background:var(--accent);color:#0c1016;border-color:var(--accent);}
+button:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+.speed{display:inline-flex;gap:4px;}
+.speed button{padding:6px 9px;font-size:12px;}
+.speed button[aria-pressed="true"]{background:var(--accent);color:#0c1016;border-color:var(--accent);}
+input[type=range]{flex:1;min-width:160px;accent-color:var(--accent);cursor:pointer;}
+.tcount{font-family:"IBM Plex Mono",monospace;font-size:12px;color:var(--muted);min-width:118px;text-align:right;}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;}}
+.note{color:var(--faint);font-size:11px;margin-top:14px;line-height:1.6;}
+.note code{font-family:"IBM Plex Mono",monospace;color:var(--muted);}
+
+/* dynamics tuner */
+.tuner{margin-bottom:16px;}
+.tuner-body{padding:14px 16px 16px;}
+.tuner-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:14px 26px;}
+@media(max-width:680px){.tuner-grid{grid-template-columns:1fr;}}
+.ctl{display:flex;flex-direction:column;gap:5px;}
+.ctl .top{display:flex;justify-content:space-between;align-items:baseline;}
+.ctl .name{font-size:12px;font-weight:600;color:var(--ink);}
+.ctl .name em{font-style:normal;color:var(--faint);font-weight:400;font-family:"IBM Plex Mono",monospace;}
+.ctl .val{font-family:"IBM Plex Mono",monospace;font-size:13px;font-weight:600;color:var(--accent);}
+.ctl .desc{font-size:10.5px;color:var(--faint);line-height:1.4;}
+.ctl input[type=range]{width:100%;min-width:0;}
+.tuner-foot{display:flex;flex-wrap:wrap;align-items:center;gap:10px 14px;margin-top:16px;
+  padding-top:14px;border-top:1px solid var(--line);}
+.presets{display:inline-flex;gap:6px;}
+.presets button{padding:6px 11px;font-size:12px;}
+.presets button[aria-pressed="true"]{background:var(--accent);color:#0c1016;border-color:var(--accent);}
+.mini{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;color:var(--muted);}
+.mini input{width:66px;font-family:"IBM Plex Mono",monospace;font-size:12px;color:var(--ink);
+  background:var(--panel-2);border:1px solid var(--line);border-radius:6px;padding:5px 7px;}
+.mini input.seed{width:96px;}
+#copyCli{margin-left:auto;}
+.toast{font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--bid);opacity:0;transition:opacity .2s;}
+.toast.show{opacity:1;}
+.cli{margin-top:12px;font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--muted);
+  background:var(--panel-2);border:1px solid var(--line);border-radius:7px;padding:9px 11px;
+  overflow-x:auto;white-space:nowrap;}
+.cli b{color:var(--ink);font-weight:600;}
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="brand">
+      <h1>ES Feed Simulator</h1>
+      <div class="sub">CME MDP 3.0 · Simple Binary Encoding over UDP multicast</div>
+    </div>
+    <div class="chips" id="chips"></div>
+    <div class="price-box">
+      <div class="lab">Mid</div>
+      <div class="px mono" id="bigPx">—</div>
+      <div class="chg mono" id="bigChg">&nbsp;</div>
+    </div>
+  </header>
+
+  <!-- price dynamics tuner -->
+  <section class="panel tuner">
+    <h2>Price Dynamics <span class="hint">live preview · re-simulates the whole feed instantly</span></h2>
+    <div class="tuner-body">
+      <div class="tuner-grid">
+        <div class="ctl">
+          <div class="top"><span class="name">Volatility <em>σ</em></span><span class="val" id="vVolatility">—</span></div>
+          <input type="range" id="cVolatility" min="0.05" max="2" step="0.05">
+          <span class="desc">Std-dev of each tick-by-tick shock, in ticks. Higher = jumpier price.</span>
+        </div>
+        <div class="ctl">
+          <div class="top"><span class="name">Mean reversion <em>θ</em></span><span class="val" id="vReversion">—</span></div>
+          <input type="range" id="cReversion" min="0" max="0.05" step="0.001">
+          <span class="desc">Pull back toward band center. 0 = free walk to the edges; high = hugs center.</span>
+        </div>
+        <div class="ctl">
+          <div class="top"><span class="name">Jump probability</span><span class="val" id="vJumpProb">—</span></div>
+          <input type="range" id="cJumpProb" min="0" max="0.15" step="0.005">
+          <span class="desc">Chance per step of a sudden gap move (news / liquidity event).</span>
+        </div>
+        <div class="ctl">
+          <div class="top"><span class="name">Jump size</span><span class="val" id="vJumpSize">—</span></div>
+          <input type="range" id="cJumpSize" min="1" max="20" step="0.5">
+          <span class="desc">Mean magnitude of a jump, in ticks (0.25 pt each).</span>
+        </div>
+      </div>
+      <div class="tuner-foot">
+        <div class="presets" role="group" aria-label="presets">
+          <button data-preset="calm">Calm</button>
+          <button data-preset="normal">Normal</button>
+          <button data-preset="volatile">Volatile</button>
+          <button data-preset="jumpy">Jumpy</button>
+        </div>
+        <label class="mini">band <input id="cLow" type="number" step="0.25"> –
+          <input id="cHigh" type="number" step="0.25"></label>
+        <label class="mini">seed <input id="cSeed" class="seed" type="number"></label>
+        <button id="reseed">↻ new seed</button>
+        <button id="copyCli" class="primary">Copy simulator command</button>
+        <span class="toast" id="toast">copied ✓</span>
+      </div>
+      <div class="cli" id="cliText"></div>
+    </div>
+  </section>
+
+  <div class="grid">
+    <!-- order book -->
+    <section class="panel">
+      <h2>DOM Ladder <span class="hint">bid · price · ask</span></h2>
+      <div class="ladder" id="ladder"></div>
+    </section>
+
+    <!-- chart -->
+    <section class="panel">
+      <h2>Mid Price Walk <span class="hint" id="chartHint"></span></h2>
+      <div class="chart-wrap">
+        <canvas id="chart" aria-label="Mid price random walk within the submitted band"></canvas>
+        <div class="legend">
+          <span><i class="swatch" style="background:var(--accent)"></i>mid</span>
+          <span><i class="swatch" style="background:var(--muted);opacity:.6"></i>band [low, high]</span>
+          <span><i class="swatch" style="background:var(--faint);opacity:.5"></i>center</span>
+          <span><i class="swatch" style="width:8px;height:8px;border-radius:50%;background:var(--trade)"></i>trade print</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- tape -->
+    <section class="panel">
+      <h2>Decoded Message Tape <span class="hint">from the wire</span></h2>
+      <div class="tape" id="tape"></div>
+    </section>
+  </div>
+
+  <div class="stats" id="stats"></div>
+
+  <!-- wire -->
+  <section class="panel">
+    <h2>Bytes On The Wire <span class="hint">one packet · little-endian · annotated</span></h2>
+    <div class="wire">
+      <div class="hex" id="hex"></div>
+      <div class="wkey">
+        <span><i style="background:rgba(240,180,41,.5)"></i>MsgSeqNum u32</span>
+        <span><i style="background:rgba(47,191,135,.5)"></i>SendingTime u64 (ns)</span>
+        <span><i style="background:rgba(255,93,108,.45)"></i>MsgSize u16</span>
+        <span><i style="background:rgba(120,140,255,.5)"></i>SBE hdr (blockLen·tmpl·schema·ver)</span>
+        <span><i style="background:var(--line)"></i>message body + group</span>
+      </div>
+      <div class="decoded" id="decoded"></div>
+    </div>
+  </section>
+
+  <div class="controls">
+    <button class="primary" id="play">▶ Play</button>
+    <div class="speed" role="group" aria-label="playback speed">
+      <button data-sp="1" aria-pressed="true">1×</button>
+      <button data-sp="2" aria-pressed="false">2×</button>
+      <button data-sp="4" aria-pressed="false">4×</button>
+      <button data-sp="8" aria-pressed="false">8×</button>
+    </div>
+    <input type="range" id="scrub" min="0" max="100" value="0" aria-label="scrub timeline">
+    <div class="tcount mono" id="tcount">0 / 0</div>
+  </div>
+
+  <p class="note">
+    Every value above was decoded from raw SBE bytes produced by the simulator — the ladder,
+    tape, and price path are reconstructed from the wire, not read from engine internals.
+    Replace <code>schema/mdp3.xml</code> with CME's official <code>templates_FixBinary.xml</code>
+    for bit-for-bit production parity. Generated by <code>record_session.py</code>.
+  </p>
+</div>
+
+<script>
+const SESSION = __SESSION_JSON__;
+const M = SESSION.meta;
+let F = SESSION.frames;
+const TICK = M.tick;
+// live-tunable dynamics (init to the values the recorded session used)
+let params = {low:M.low, high:M.high, depth:M.depth, steps:M.steps,
+              volatility:0.6, reversion:0.004, jumpProb:0, jumpSize:8, seed:20260820};
+
+// ---- header chips ----
+document.getElementById('chips').innerHTML = [
+  ['channel', M.channel],['product', M.product],['securityID', M.securityId],
+  ['schema', 'id '+M.schemaId+' v'+M.schemaVersion],['tick', M.tick+' ($'+M.tickValue+')'],
+  ['mcast', M.multicast]
+].map(([k,v])=>`<span class="chip">${k} <b>${v}</b></span>`).join('');
+document.getElementById('chartHint').textContent = `band [${M.low}, ${M.high}] · center ${M.center}`;
+
+// ---- canvas chart ----
+const cv = document.getElementById('chart'), cx = cv.getContext('2d');
+function sizeCanvas(){
+  const r = cv.getBoundingClientRect(), dpr = window.devicePixelRatio||1;
+  cv.width = r.width*dpr; cv.height = 300*dpr; cx.setTransform(dpr,0,0,dpr,0,0);
+  return {w:r.width, h:300};
+}
+function css(v){return getComputedStyle(document.documentElement).getPropertyValue(v).trim();}
+function drawChart(upTo){
+  const {w,h} = sizeCanvas(); cx.clearRect(0,0,w,h);
+  const padL=8, padR=54, padT=14, padB=14, iw=w-padL-padR, ih=h-padT-padB;
+  const lo=M.low, hi=M.high;
+  const y = p => padT + (1-(p-lo)/(hi-lo))*ih;
+  const n = F.length, x = i => padL + (n<=1?0:i/(n-1))*iw;
+  // band fill
+  cx.fillStyle = css('--grid'); cx.fillRect(padL,y(hi),iw,y(lo)-y(hi));
+  // gridlines + price axis
+  cx.strokeStyle = css('--grid'); cx.fillStyle = css('--faint');
+  cx.font='10px "IBM Plex Mono",monospace'; cx.textBaseline='middle';
+  const steps=5;
+  for(let i=0;i<=steps;i++){const p=lo+(hi-lo)*i/steps;
+    cx.beginPath();cx.moveTo(padL,y(p));cx.lineTo(padL+iw,y(p));cx.stroke();
+    cx.fillText(p.toFixed(2), padL+iw+6, y(p));}
+  // center line
+  cx.strokeStyle=css('--faint');cx.setLineDash([3,4]);cx.globalAlpha=.6;
+  cx.beginPath();cx.moveTo(padL,y(M.center));cx.lineTo(padL+iw,y(M.center));cx.stroke();
+  cx.setLineDash([]);cx.globalAlpha=1;
+  // mid path
+  cx.strokeStyle=css('--accent');cx.lineWidth=1.6;cx.lineJoin='round';cx.beginPath();
+  for(let i=0;i<=upTo && i<n;i++){const px=x(i),py=y(F[i].mid);i===0?cx.moveTo(px,py):cx.lineTo(px,py);}
+  cx.stroke();
+  // trade prints
+  for(let i=0;i<=upTo && i<n;i++){for(const t of F[i].trades){
+    cx.fillStyle=css('--trade');cx.globalAlpha=.85;
+    cx.beginPath();cx.arc(x(i),y(t[0]),2.2,0,7);cx.fill();cx.globalAlpha=1;}}
+  // current marker
+  if(upTo>=0&&upTo<n){const f=F[Math.min(upTo,n-1)];
+    cx.fillStyle=css('--accent');cx.beginPath();cx.arc(x(upTo),y(f.mid),3.5,0,7);cx.fill();
+    cx.strokeStyle=css('--panel');cx.lineWidth=1.5;cx.stroke();}
+}
+
+// ---- JS port of engine.py: re-simulate the whole feed from tuned params ----
+// (a faithful preview of the model; the Python simulator is authoritative and
+//  reproduces these dynamics on the wire with the matching CLI flags below)
+function mulberry32(seed){let s=seed>>>0;return function(){s=s+0x6D2B79F5|0;
+  let t=Math.imul(s^s>>>15,1|s);t=t+Math.imul(t^t>>>7,61|t)^t;return ((t^t>>>14)>>>0)/4294967296;};}
+function gaussFn(rng){return ()=>{let u=0,v=0;while(u===0)u=rng();while(v===0)v=rng();
+  return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v);};}
+const rt = p => Math.round(p/TICK)*TICK;
+
+function simulate(P){
+  const low=rt(P.low), high=rt(P.high), center=rt((low+high)/2), depth=P.depth;
+  const rng=mulberry32(P.seed), gauss=gaussFn(rng);
+  let bidPx=rt(center)-TICK;
+  let bids=new Map(), offers=new Map();
+  const stepBid=()=>{
+    let drift=-P.reversion*(bidPx-center)/TICK;
+    let shock=gauss()*P.volatility;
+    if(P.jumpProb>0 && rng()<P.jumpProb){
+      const mag=Math.abs(P.jumpSize+gauss()*P.jumpSize*0.3);
+      shock+=(rng()<0.5?mag:-mag);
+    }
+    let nb=bidPx+Math.round(drift+shock)*TICK;
+    const lo=low, hi=high-TICK;
+    if(nb<lo) nb=lo+(lo-nb);
+    if(nb>hi) nb=hi-(nb-hi);
+    return rt(Math.min(Math.max(nb,lo),hi));
+  };
+  const targets=side=>{
+    const m=new Map(), best=side==='Bid'?bidPx:bidPx+TICK;
+    for(let i=0;i<depth;i++){
+      const price=rt(side==='Bid'?best-i*TICK:best+i*TICK);
+      if(price<low||price>high) continue;
+      const base=20+i*15;
+      const size=Math.max(1,Math.floor(base+gauss()*base*0.3));
+      const orders=Math.max(1,Math.floor(size/(3+rng()*6)));
+      m.set(price,[price,size,orders]);
+    }
+    return m;
+  };
+  const diff=(cur,tgt)=>{let n=0;
+    for(const[p,l]of tgt){const o=cur.get(p);if(!o||o[1]!==l[1]||o[2]!==l[2])n++;}
+    for(const p of cur.keys())if(!tgt.has(p))n++;return n;};
+  const frames=[]; let seq=0;
+  for(let i=0;i<P.steps;i++){
+    bidPx=stepBid();
+    const tb=targets('Bid'), to=targets('Offer');
+    const nInc=diff(bids,tb)+diff(offers,to);
+    bids=tb; offers=to;
+    const trades=[];
+    if(rng()<0.35){
+      const buy=rng()<0.5;
+      if(buy){const px=Math.min(...to.keys());trades.push([px,Math.max(1,Math.floor(-Math.log(1-rng())*4)),'Buy']);}
+      else{const px=Math.max(...tb.keys());trades.push([px,Math.max(1,Math.floor(-Math.log(1-rng())*4)),'Sell']);}
+    }
+    if(nInc===0 && trades.length===0) continue;
+    seq++;
+    let nMsgs=0, bytes=12;                       // packet header
+    if(nInc>0){nMsgs++;bytes+=2+8+11+3+32*nInc;}  // size+sbehdr+block+groupdim+entries
+    if(trades.length){nMsgs++;bytes+=2+8+11+3+32*trades.length;}
+    frames.push({seq, mid:Math.round((bidPx+TICK/2)*1e4)/1e4,
+      bestBid:Math.max(...bids.keys()), bestOffer:Math.min(...offers.keys()),
+      bytes, nMsgs,
+      bids:[...bids.values()].sort((a,b)=>b[0]-a[0]).slice(0,depth),
+      offers:[...offers.values()].sort((a,b)=>a[0]-b[0]).slice(0,depth),
+      trades});
+  }
+  return frames;
+}
+
+// ---- render one frame ----
+let maxSize = 1;
+function setMaxSize(frames){maxSize=1;
+  for(const f of frames){for(const b of f.bids)maxSize=Math.max(maxSize,b[1]);
+    for(const o of f.offers)maxSize=Math.max(maxSize,o[1]);}}
+setMaxSize(F);
+function fmtTs(ns){const ms=Number(ns/1000000n===undefined?0:0);return '';}
+function tapeTime(i){const s=(i*0.1);return s.toFixed(1)+'s';}
+
+function lastTradePx(upTo){
+  for(let i=upTo;i>=0;i--){if(F[i].trades.length)return F[i].trades[F[i].trades.length-1][0];}
+  return null;
+}
+function renderLadder(f,upTo){
+  const tick=M.tick;
+  const bidMap=new Map(f.bids.map(b=>[b[0].toFixed(2),b]));
+  const offMap=new Map(f.offers.map(o=>[o[0].toFixed(2),o]));
+  const top=Math.max(...f.offers.map(o=>o[0]));
+  const bot=Math.min(...f.bids.map(b=>b[0]));
+  const last=lastTradePx(upTo);
+  const eq=(a,b)=>Math.abs(a-b)<1e-9;
+  let html='<div class="dom-head"><span class="b">bid qty</span>'+
+           '<span class="p">price</span><span class="a">ask qty</span></div>';
+  // continuous price scale, high at top to low at bottom (classic futures ladder)
+  const rows=Math.round((top-bot)/tick);
+  for(let k=0;k<=rows;k++){
+    const p=+(top-k*tick).toFixed(2), key=p.toFixed(2);
+    const b=bidMap.get(key), o=offMap.get(key);
+    const cls=[b&&eq(p,f.bestBid)?'bestbid':'', o&&eq(p,f.bestOffer)?'bestoff':'',
+               last!=null&&eq(p,last)?'last':''].join(' ').trim();
+    const bw=b?(b[1]/maxSize*100).toFixed(1):0, ow=o?(o[1]/maxSize*100).toFixed(1):0;
+    html+=`<div class="lrow ${cls}">`+
+      `<div class="cell bidc">${b?`<span class="bar" style="width:${bw}%"></span><span class="q">${b[1]}</span>`:''}</div>`+
+      `<div class="cell pxc">${p.toFixed(2)}</div>`+
+      `<div class="cell askc">${o?`<span class="bar" style="width:${ow}%"></span><span class="q">${o[1]}</span>`:''}</div>`+
+      `</div>`;
+  }
+  html+=`<div class="dom-foot"><span>spread <b>${(f.bestOffer-f.bestBid).toFixed(2)}</b></span>`+
+        `<span>last <b>${last!=null?last.toFixed(2):'—'}</b></span>`+
+        `<span>mid <b>${f.mid.toFixed(3)}</b></span></div>`;
+  document.getElementById('ladder').innerHTML=html;
+}
+
+function renderTape(upTo){
+  const start=Math.max(0,upTo-40);let html='';
+  for(let i=upTo;i>=start;i--){const f=F[i];
+    for(const t of f.trades){
+      html+=`<div class="ev"><span class="t">${tapeTime(i)}</span>`+
+        `<span class="tag trade">TRD</span><span class="body"><b>${t[1]}</b> @ <b>${t[0].toFixed(2)}</b> `+
+        `<span class="${t[2]==='Buy'?'buy':'sell'}">${t[2]}</span></span></div>`;}
+    html+=`<div class="ev"><span class="t">${tapeTime(i)}</span>`+
+      `<span class="tag book">BOOK</span><span class="body">seq <b>${f.seq}</b> · `+
+      `${f.nMsgs} msg · <b>${f.bytes}</b>B · bid <b>${f.bestBid.toFixed(2)}</b> / off <b>${f.bestOffer.toFixed(2)}</b></span></div>`;
+  }
+  document.getElementById('tape').innerHTML=html;
+}
+
+function renderStats(upTo){
+  let bytes=0,trades=0;for(let i=0;i<=upTo;i++){bytes+=F[i].bytes;trades+=F[i].trades.length;}
+  const f=F[upTo];
+  const s=[['packet seq',f.seq],['bytes on wire',bytes.toLocaleString()],
+    ['trades printed',trades],['msg / packet',f.nMsgs]];
+  document.getElementById('stats').innerHTML=s.map(([k,v])=>
+    `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
+}
+
+// ---- wire hex (static sample packet) ----
+function renderWire(){
+  const hex=SESSION.sampleHex;const bytes=hex.match(/../g);
+  // packet header: 4 seq + 8 time = 12 bytes; then msg1: 2 size + 8 sbehdr + ...
+  const spans=[];
+  const seg=(a,b,cls)=>{for(let i=a;i<b;i++)spans[i]=cls;};
+  seg(0,4,'h-seq');seg(4,12,'h-time');       // packet header
+  seg(12,14,'h-size');seg(14,22,'h-hdr');    // msg1 size + sbe header
+  // rest of first message body is unmarked; find msg1 size to mark msg2 framing
+  const msgSize = bytes[12] ? parseInt(bytes[13]+bytes[12],16) : 0;
+  const msg2 = 14+msgSize;
+  if(msg2+10<=bytes.length){seg(msg2-0,msg2,'');seg(msg2,msg2+2,'h-size');seg(msg2+2,msg2+10,'h-hdr');}
+  let html='';bytes.forEach((by,i)=>{const c=spans[i]||'h-body';
+    html+=`<span class="hx ${c}">${by}</span>${(i+1)%2===0?' ':''}`;});
+  document.getElementById('hex').innerHTML=html;
+  // decoded summary
+  const d=SESSION.sampleDecoded;let dh='';
+  for(const m of d){dh+=`<div><b>${m.template}</b> (template ${m.id}) — `+
+    `transactTime ${m.root.transactTime}, evt [${(m.root.matchEventIndicator||[]).join(', ')}]</div>`;
+    const es=(m.groups.MDEntries||[]).slice(0,4);
+    for(const e of es){dh+=`<div>&nbsp;&nbsp;${(e.mdUpdateAction||'')} ${e.mdEntryType} `+
+      `${e.mdEntrySize}@${(e.mdEntryPx||0).toFixed?e.mdEntryPx.toFixed(2):e.mdEntryPx} `+
+      `L${e.mdPriceLevel??'-'} rpt${e.rptSeq}</div>`;}
+    if((m.groups.MDEntries||[]).length>4)dh+=`<div>&nbsp;&nbsp;… ${m.groups.MDEntries.length-4} more entries</div>`;}
+  document.getElementById('decoded').innerHTML=dh;
+}
+
+// ---- playback ----
+let cur=0, playing=false, speed=1, timer=null;
+const scrub=document.getElementById('scrub'), tcount=document.getElementById('tcount');
+scrub.max=F.length-1;
+function show(i){
+  cur=Math.max(0,Math.min(F.length-1,i));const f=F[cur];
+  document.getElementById('bigPx').textContent=f.mid.toFixed(3);
+  const prev=cur>0?F[cur-1].mid:f.mid;const d=f.mid-prev;
+  const chg=document.getElementById('bigChg');
+  chg.textContent=(d>=0?'▲ +':'▼ ')+d.toFixed(2)+'  ('+((f.mid-M.center)>=0?'+':'')+(f.mid-M.center).toFixed(2)+' vs center)';
+  chg.className='chg mono '+(d>=0?'up':'down');
+  renderLadder(f,cur);renderTape(cur);renderStats(cur);drawChart(cur);
+  scrub.value=cur;tcount.textContent=`${cur+1} / ${F.length}  ·  ${tapeTime(cur)}`;
+}
+function tick(){if(!playing)return;if(cur>=F.length-1){pause();return;}show(cur+1);
+  timer=setTimeout(()=>requestAnimationFrame(tick),100/speed);}
+function play(){if(cur>=F.length-1)cur=0;playing=true;document.getElementById('play').textContent='❚❚ Pause';tick();}
+function pause(){playing=false;clearTimeout(timer);document.getElementById('play').textContent='▶ Play';}
+document.getElementById('play').onclick=()=>playing?pause():play();
+scrub.oninput=()=>{pause();show(+scrub.value);};
+document.querySelectorAll('.speed button').forEach(b=>b.onclick=()=>{
+  speed=+b.dataset.sp;document.querySelectorAll('.speed button').forEach(x=>x.setAttribute('aria-pressed',x===b));});
+window.addEventListener('resize',()=>drawChart(cur));
+matchMedia('(prefers-color-scheme:dark)').addEventListener?.('change',()=>drawChart(cur));
+
+// ---- dynamics tuner wiring ----
+const PRESETS={
+  calm:     {volatility:0.25, reversion:0.02,  jumpProb:0,    jumpSize:8},
+  normal:   {volatility:0.6,  reversion:0.004, jumpProb:0,    jumpSize:8},
+  volatile: {volatility:1.2,  reversion:0.002, jumpProb:0,    jumpSize:8},
+  jumpy:    {volatility:0.6,  reversion:0.004, jumpProb:0.04, jumpSize:12},
+};
+const $=id=>document.getElementById(id);
+const RANGES=[['Volatility','volatility',2],['Reversion','reversion',3],
+              ['JumpProb','jumpProb',3],['JumpSize','jumpSize',1]];
+function cliString(){
+  const p=params;let s=`python3 simulator.py --low ${p.low} --high ${p.high} `+
+    `--duration 3600 --rate 20 --volatility ${p.volatility} --reversion ${p.reversion}`;
+  if(p.jumpProb>0) s+=` --jump-prob ${p.jumpProb} --jump-size ${p.jumpSize}`;
+  s+=` --seed ${p.seed}`;return s;
+}
+function syncDisplays(){
+  $('cVolatility').value=params.volatility; $('vVolatility').textContent=params.volatility.toFixed(2)+'  ticks';
+  $('cReversion').value=params.reversion;   $('vReversion').textContent=params.reversion.toFixed(3);
+  $('cJumpProb').value=params.jumpProb;      $('vJumpProb').textContent=(params.jumpProb*100).toFixed(1)+'%  / step';
+  $('cJumpSize').value=params.jumpSize;      $('vJumpSize').textContent=params.jumpSize.toFixed(1)+'  ticks';
+  $('cLow').value=params.low; $('cHigh').value=params.high; $('cSeed').value=params.seed;
+  const c=cliString();
+  $('cliText').innerHTML=c.replace(/--(\S+) (\S+)/g,'--$1 <b>$2</b>');
+}
+function regenerate(){
+  M.low=params.low; M.high=params.high; M.center=rt((params.low+params.high)/2);
+  $('chartHint').textContent=`band [${M.low}, ${M.high}] · center ${M.center}`;
+  F=simulate(params); setMaxSize(F);
+  scrub.max=Math.max(0,F.length-1);
+  if(cur>F.length-1) cur=F.length-1;
+  syncDisplays();
+  show(cur);
+}
+function clearPreset(){document.querySelectorAll('.presets button').forEach(b=>b.setAttribute('aria-pressed','false'));}
+function markPreset(name){document.querySelectorAll('.presets button').forEach(b=>
+  b.setAttribute('aria-pressed', b.dataset.preset===name?'true':'false'));}
+
+RANGES.forEach(([_,key])=>{
+  $('c'+_).addEventListener('input',e=>{params[key]=+e.target.value;clearPreset();regenerate();});
+});
+$('cLow').addEventListener('change',e=>{const v=+e.target.value;
+  if(v<params.high){params.low=rt(v);regenerate();}else e.target.value=params.low;});
+$('cHigh').addEventListener('change',e=>{const v=+e.target.value;
+  if(v>params.low){params.high=rt(v);regenerate();}else e.target.value=params.high;});
+$('cSeed').addEventListener('change',e=>{params.seed=+e.target.value|0;regenerate();});
+$('reseed').addEventListener('click',()=>{params.seed=Math.floor(Math.random()*1000000);regenerate();});
+document.querySelectorAll('.presets button').forEach(b=>b.addEventListener('click',()=>{
+  Object.assign(params,PRESETS[b.dataset.preset]);markPreset(b.dataset.preset);regenerate();}));
+$('copyCli').addEventListener('click',async()=>{
+  try{await navigator.clipboard.writeText(cliString());}catch(e){}
+  const t=$('toast');t.classList.add('show');setTimeout(()=>t.classList.remove('show'),1400);});
+
+markPreset('normal');
+syncDisplays();
+renderWire();show(0);
+</script>

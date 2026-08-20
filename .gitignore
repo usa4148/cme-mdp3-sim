@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Virtual environment
+.venv/
+venv/
+
+# Generated artifacts (regenerate with build_dashboard.py)
+session.json
+dashboard.html
+
+# OS
+.DS_Store
