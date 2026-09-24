@@ -174,7 +174,17 @@ input[type=range]{flex:1;min-width:160px;accent-color:var(--accent);cursor:point
 .mini{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;color:var(--muted);}
 .mini input{width:66px;font-family:"IBM Plex Mono",monospace;font-size:12px;color:var(--ink);
   background:var(--panel-2);border:1px solid var(--line);border-radius:6px;padding:5px 7px;}
-.mini input.seed{width:96px;}
+.mini input.seed{width:96px;} .mini input.px{width:108px;}
+.product-pick{display:flex;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap;}
+.product-pick label{font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--faint);}
+.product-pick select{font-family:"IBM Plex Mono",monospace;font-size:12.5px;
+  color:var(--ink);background:var(--panel-2);border:1px solid var(--line);
+  border-radius:6px;padding:5px 8px;cursor:pointer;max-width:320px;}
+.product-pick select:disabled{opacity:.55;cursor:not-allowed;}
+.product-pick .contract{font-family:"IBM Plex Mono",monospace;font-size:12px;
+  color:var(--muted);}
+.mini.start{color:var(--ink);} .mini.start input{font-weight:600;}
 #copyCli{margin-left:auto;}
 .toast{font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--bid);opacity:0;transition:opacity .2s;}
 .toast.show{opacity:1;}
@@ -187,8 +197,13 @@ input[type=range]{flex:1;min-width:160px;accent-color:var(--accent);cursor:point
 <div class="wrap">
   <header>
     <div class="brand">
-      <h1>ES Feed Simulator</h1>
+      <h1 id="brandTitle">ES Feed Simulator</h1>
       <div class="sub">CME MDP 3.0 · Simple Binary Encoding over UDP multicast</div>
+      <div class="product-pick">
+        <label for="cProduct">product</label>
+        <select id="cProduct" aria-label="futures product"></select>
+        <span class="contract" id="contractHint"></span>
+      </div>
     </div>
     <div class="chips" id="chips"></div>
     <div class="price-box">
@@ -231,8 +246,11 @@ input[type=range]{flex:1;min-width:160px;accent-color:var(--accent);cursor:point
           <button data-preset="volatile">Volatile</button>
           <button data-preset="jumpy">Jumpy</button>
         </div>
-        <label class="mini">band <input id="cLow" type="number" step="0.25"> –
-          <input id="cHigh" type="number" step="0.25"></label>
+        <label class="mini start" title="Opening price of the walk. If you move it outside the band, the band follows.">start
+          <input id="cStart" class="px" type="number" step="0.25"></label>
+        <button id="resetStart" title="Back to the prior session's close">↺ prior close</button>
+        <label class="mini">band <input id="cLow" class="px" type="number" step="0.25"> –
+          <input id="cHigh" class="px" type="number" step="0.25"></label>
         <label class="mini">seed <input id="cSeed" class="seed" type="number"></label>
         <button id="reseed">↻ new seed</button>
         <button id="copyCli" class="primary">Copy simulator command</button>
@@ -258,6 +276,7 @@ input[type=range]{flex:1;min-width:160px;accent-color:var(--accent);cursor:point
           <span><i class="swatch" style="background:var(--accent)"></i>mid</span>
           <span><i class="swatch" style="background:var(--muted);opacity:.6"></i>band [low, high]</span>
           <span><i class="swatch" style="background:var(--faint);opacity:.5"></i>center</span>
+          <span><i class="swatch" style="background:var(--muted);opacity:.75"></i>opening price</span>
           <span><i class="swatch" style="width:8px;height:8px;border-radius:50%;background:var(--trade)"></i>trade print</span>
         </div>
       </div>
@@ -313,17 +332,43 @@ const SESSION = __SESSION_JSON__;
 const M = SESSION.meta;
 let F = SESSION.frames;
 const TICK = M.tick;
+// Price precision is per product: ES needs 2 decimals, a 10-year note 6, the
+// Japanese Yen 7. Everything that prints a price goes through fmt().
+const DP = (M.decimals != null) ? M.decimals : 2;
+const fmt = (p, extra) => Number(p).toFixed(DP + (extra || 0));
+const fmtMid = p => fmt(p, 1);          // the mid sits on a half-tick
 // live-tunable dynamics (init to the values the recorded session used)
-let params = {low:M.low, high:M.high, depth:M.depth, steps:M.steps,
+let params = {low:M.low, high:M.high, start:M.start, depth:M.depth, steps:M.steps,
               volatility:0.6, reversion:0.004, jumpProb:0, jumpSize:8, seed:20260820};
+// The prior-session close this page was generated with, kept so the tuner can
+// snap back to it after you've dragged the opening price around.
+const PRIOR_CLOSE = M.startSource === 'priorClose' ? M.start : null;
+const PRIOR_CLOSE_LABEL = PRIOR_CLOSE === null ? '' :
+  `${M.closeSymbol || 'ES=F'} ${M.closeDate || ''}${M.startStale ? ' (cached)' : ''}`.trim();
 
 // ---- header chips ----
-document.getElementById('chips').innerHTML = [
+const CHIPS = [
   ['channel', M.channel],['product', M.product],['securityID', M.securityId],
   ['schema', 'id '+M.schemaId+' v'+M.schemaVersion],['tick', M.tick+' ($'+M.tickValue+')'],
   ['mcast', M.multicast]
-].map(([k,v])=>`<span class="chip">${k} <b>${v}</b></span>`).join('');
-document.getElementById('chartHint').textContent = `band [${M.low}, ${M.high}] · center ${M.center}`;
+];
+if(PRIOR_CLOSE !== null) CHIPS.splice(3, 0, ['prev close', fmt(PRIOR_CLOSE)+
+  (M.closeDate ? ' · '+M.closeDate : '')+(M.startStale ? ' · cached' : '')]);
+document.getElementById('chips').innerHTML =
+  CHIPS.map(([k,v])=>`<span class="chip">${k} <b>${v}</b></span>`).join('');
+
+// What the big header delta is measured against: the opening price if there is
+// one, otherwise the band center (the pre-start-price behaviour).
+function refPx(){return params.start==null?M.center:params.start;}
+function refLabel(){
+  if(params.start==null) return 'center';
+  return (PRIOR_CLOSE!==null && params.start===PRIOR_CLOSE) ? 'prev close' : 'open';
+}
+function chartHint(){
+  const s = params.start==null ? `center ${fmt(M.center)}` : `open ${fmt(params.start)}`;
+  return `band [${fmt(M.low)}, ${fmt(M.high)}] · ${s}`;
+}
+document.getElementById('chartHint').textContent = chartHint();
 
 // ---- canvas chart ----
 const cv = document.getElementById('chart'), cx = cv.getContext('2d');
@@ -347,11 +392,21 @@ function drawChart(upTo){
   const steps=5;
   for(let i=0;i<=steps;i++){const p=lo+(hi-lo)*i/steps;
     cx.beginPath();cx.moveTo(padL,y(p));cx.lineTo(padL+iw,y(p));cx.stroke();
-    cx.fillText(p.toFixed(2), padL+iw+6, y(p));}
+    cx.fillText(fmt(p), padL+iw+6, y(p));}
   // center line
   cx.strokeStyle=css('--faint');cx.setLineDash([3,4]);cx.globalAlpha=.6;
   cx.beginPath();cx.moveTo(padL,y(M.center));cx.lineTo(padL+iw,y(M.center));cx.stroke();
   cx.setLineDash([]);cx.globalAlpha=1;
+  // opening price (prior session's close unless you changed it)
+  const openPx = params.start;
+  if(openPx!=null && openPx>=lo && openPx<=hi){
+    cx.strokeStyle=css('--muted');cx.setLineDash([7,4]);cx.globalAlpha=.75;cx.lineWidth=1;
+    cx.beginPath();cx.moveTo(padL,y(openPx));cx.lineTo(padL+iw,y(openPx));cx.stroke();
+    cx.setLineDash([]);
+    cx.fillStyle=css('--muted');cx.textBaseline='bottom';cx.textAlign='left';
+    cx.fillText(refLabel()+' '+fmt(openPx), padL+4, y(openPx)-3);
+    cx.textBaseline='middle';cx.globalAlpha=1;
+  }
   // mid path
   cx.strokeStyle=css('--accent');cx.lineWidth=1.6;cx.lineJoin='round';cx.beginPath();
   for(let i=0;i<=upTo && i<n;i++){const px=x(i),py=y(F[i].mid);i===0?cx.moveTo(px,py):cx.lineTo(px,py);}
@@ -373,12 +428,16 @@ function mulberry32(seed){let s=seed>>>0;return function(){s=s+0x6D2B79F5|0;
   let t=Math.imul(s^s>>>15,1|s);t=t+Math.imul(t^t>>>7,61|t)^t;return ((t^t>>>14)>>>0)/4294967296;};}
 function gaussFn(rng){return ()=>{let u=0,v=0;while(u===0)u=rng();while(v===0)v=rng();
   return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v);};}
-const rt = p => Math.round(p/TICK)*TICK;
+// snap to the tick grid; the outer round clears float fuzz on fine grids
+const rt = p => Number((Math.round(p/TICK)*TICK).toFixed(10));
 
 function simulate(P){
   const low=rt(P.low), high=rt(P.high), center=rt((low+high)/2), depth=P.depth;
   const rng=mulberry32(P.seed), gauss=gaussFn(rng);
-  let bidPx=rt(center)-TICK;
+  // Mirror engine.py: the opening price becomes the best bid (so the opening mid
+  // sits half a tick above it); with no start price the book straddles center.
+  let bidPx = P.start==null ? rt(center)-TICK
+            : Math.min(Math.max(rt(P.start), low), high-TICK);
   let bids=new Map(), offers=new Map();
   const stepBid=()=>{
     let drift=-P.reversion*(bidPx-center)/TICK;
@@ -425,7 +484,7 @@ function simulate(P){
     let nMsgs=0, bytes=12;                       // packet header
     if(nInc>0){nMsgs++;bytes+=2+8+11+3+32*nInc;}  // size+sbehdr+block+groupdim+entries
     if(trades.length){nMsgs++;bytes+=2+8+11+3+32*trades.length;}
-    frames.push({seq, mid:Math.round((bidPx+TICK/2)*1e4)/1e4,
+    frames.push({seq, mid:Number((bidPx+TICK/2).toFixed(10)),
       bestBid:Math.max(...bids.keys()), bestOffer:Math.min(...offers.keys()),
       bytes, nMsgs,
       bids:[...bids.values()].sort((a,b)=>b[0]-a[0]).slice(0,depth),
@@ -450,8 +509,9 @@ function lastTradePx(upTo){
 }
 function renderLadder(f,upTo){
   const tick=M.tick;
-  const bidMap=new Map(f.bids.map(b=>[b[0].toFixed(2),b]));
-  const offMap=new Map(f.offers.map(o=>[o[0].toFixed(2),o]));
+  // key by the product's own precision — at 2dp every Yen level collapses into one
+  const bidMap=new Map(f.bids.map(b=>[fmt(b[0]),b]));
+  const offMap=new Map(f.offers.map(o=>[fmt(o[0]),o]));
   const top=Math.max(...f.offers.map(o=>o[0]));
   const bot=Math.min(...f.bids.map(b=>b[0]));
   const last=lastTradePx(upTo);
@@ -461,20 +521,20 @@ function renderLadder(f,upTo){
   // continuous price scale, high at top to low at bottom (classic futures ladder)
   const rows=Math.round((top-bot)/tick);
   for(let k=0;k<=rows;k++){
-    const p=+(top-k*tick).toFixed(2), key=p.toFixed(2);
+    const p=+(top-k*tick).toFixed(10), key=fmt(p);
     const b=bidMap.get(key), o=offMap.get(key);
     const cls=[b&&eq(p,f.bestBid)?'bestbid':'', o&&eq(p,f.bestOffer)?'bestoff':'',
                last!=null&&eq(p,last)?'last':''].join(' ').trim();
     const bw=b?(b[1]/maxSize*100).toFixed(1):0, ow=o?(o[1]/maxSize*100).toFixed(1):0;
     html+=`<div class="lrow ${cls}">`+
       `<div class="cell bidc">${b?`<span class="bar" style="width:${bw}%"></span><span class="q">${b[1]}</span>`:''}</div>`+
-      `<div class="cell pxc">${p.toFixed(2)}</div>`+
+      `<div class="cell pxc">${fmt(p)}</div>`+
       `<div class="cell askc">${o?`<span class="bar" style="width:${ow}%"></span><span class="q">${o[1]}</span>`:''}</div>`+
       `</div>`;
   }
-  html+=`<div class="dom-foot"><span>spread <b>${(f.bestOffer-f.bestBid).toFixed(2)}</b></span>`+
-        `<span>last <b>${last!=null?last.toFixed(2):'—'}</b></span>`+
-        `<span>mid <b>${f.mid.toFixed(3)}</b></span></div>`;
+  html+=`<div class="dom-foot"><span>spread <b>${fmt(f.bestOffer-f.bestBid)}</b></span>`+
+        `<span>last <b>${last!=null?fmt(last):'—'}</b></span>`+
+        `<span>mid <b>${fmtMid(f.mid)}</b></span></div>`;
   document.getElementById('ladder').innerHTML=html;
 }
 
@@ -483,11 +543,11 @@ function renderTape(upTo){
   for(let i=upTo;i>=start;i--){const f=F[i];
     for(const t of f.trades){
       html+=`<div class="ev"><span class="t">${tapeTime(i)}</span>`+
-        `<span class="tag trade">TRD</span><span class="body"><b>${t[1]}</b> @ <b>${t[0].toFixed(2)}</b> `+
+        `<span class="tag trade">TRD</span><span class="body"><b>${t[1]}</b> @ <b>${fmt(t[0])}</b> `+
         `<span class="${t[2]==='Buy'?'buy':'sell'}">${t[2]}</span></span></div>`;}
     html+=`<div class="ev"><span class="t">${tapeTime(i)}</span>`+
       `<span class="tag book">BOOK</span><span class="body">seq <b>${f.seq}</b> · `+
-      `${f.nMsgs} msg · <b>${f.bytes}</b>B · bid <b>${f.bestBid.toFixed(2)}</b> / off <b>${f.bestOffer.toFixed(2)}</b></span></div>`;
+      `${f.nMsgs} msg · <b>${f.bytes}</b>B · bid <b>${fmt(f.bestBid)}</b> / off <b>${fmt(f.bestOffer)}</b></span></div>`;
   }
   document.getElementById('tape').innerHTML=html;
 }
@@ -522,7 +582,7 @@ function renderWire(){
     `transactTime ${m.root.transactTime}, evt [${(m.root.matchEventIndicator||[]).join(', ')}]</div>`;
     const es=(m.groups.MDEntries||[]).slice(0,4);
     for(const e of es){dh+=`<div>&nbsp;&nbsp;${(e.mdUpdateAction||'')} ${e.mdEntryType} `+
-      `${e.mdEntrySize}@${(e.mdEntryPx||0).toFixed?e.mdEntryPx.toFixed(2):e.mdEntryPx} `+
+      `${e.mdEntrySize}@${typeof e.mdEntryPx==='number'?fmt(e.mdEntryPx):e.mdEntryPx} `+
       `L${e.mdPriceLevel??'-'} rpt${e.rptSeq}</div>`;}
     if((m.groups.MDEntries||[]).length>4)dh+=`<div>&nbsp;&nbsp;… ${m.groups.MDEntries.length-4} more entries</div>`;}
   document.getElementById('decoded').innerHTML=dh;
@@ -534,10 +594,11 @@ const scrub=document.getElementById('scrub'), tcount=document.getElementById('tc
 scrub.max=F.length-1;
 function show(i){
   cur=Math.max(0,Math.min(F.length-1,i));const f=F[cur];
-  document.getElementById('bigPx').textContent=f.mid.toFixed(3);
+  document.getElementById('bigPx').textContent=fmtMid(f.mid);
   const prev=cur>0?F[cur-1].mid:f.mid;const d=f.mid-prev;
   const chg=document.getElementById('bigChg');
-  chg.textContent=(d>=0?'▲ +':'▼ ')+d.toFixed(2)+'  ('+((f.mid-M.center)>=0?'+':'')+(f.mid-M.center).toFixed(2)+' vs center)';
+  const vs=f.mid-refPx();
+  chg.textContent=(d>=0?'▲ +':'▼ ')+fmt(d)+'  ('+(vs>=0?'+':'')+fmt(vs)+' vs '+refLabel()+')';
   chg.className='chg mono '+(d>=0?'up':'down');
   renderLadder(f,cur);renderTape(cur);renderStats(cur);drawChart(cur);
   scrub.value=cur;tcount.textContent=`${cur+1} / ${F.length}  ·  ${tapeTime(cur)}`;
@@ -564,7 +625,9 @@ const $=id=>document.getElementById(id);
 const RANGES=[['Volatility','volatility',2],['Reversion','reversion',3],
               ['JumpProb','jumpProb',3],['JumpSize','jumpSize',1]];
 function cliString(){
-  const p=params;let s=`python3 simulator.py --low ${p.low} --high ${p.high} `+
+  const p=params;let s=`python3 simulator.py --product ${M.product} `+
+    `--low ${fmt(p.low)} --high ${fmt(p.high)} `+
+    (p.start==null?'':`--start ${fmt(p.start)} `)+
     `--duration 3600 --rate 20 --volatility ${p.volatility} --reversion ${p.reversion}`;
   if(p.jumpProb>0) s+=` --jump-prob ${p.jumpProb} --jump-size ${p.jumpSize}`;
   s+=` --seed ${p.seed}`;return s;
@@ -575,12 +638,20 @@ function syncDisplays(){
   $('cJumpProb').value=params.jumpProb;      $('vJumpProb').textContent=(params.jumpProb*100).toFixed(1)+'%  / step';
   $('cJumpSize').value=params.jumpSize;      $('vJumpSize').textContent=params.jumpSize.toFixed(1)+'  ticks';
   $('cLow').value=params.low; $('cHigh').value=params.high; $('cSeed').value=params.seed;
+  $('cStart').value=params.start==null?'':params.start;
+  $('resetStart').hidden = PRIOR_CLOSE===null;
+  $('resetStart').disabled = params.start===PRIOR_CLOSE;
+  $('resetStart').title = PRIOR_CLOSE===null ? '' :
+    `Back to ${fmt(PRIOR_CLOSE)}${PRIOR_CLOSE_LABEL?' — '+PRIOR_CLOSE_LABEL:''}`;
   const c=cliString();
   $('cliText').innerHTML=c.replace(/--(\S+) (\S+)/g,'--$1 <b>$2</b>');
 }
 function regenerate(){
   M.low=params.low; M.high=params.high; M.center=rt((params.low+params.high)/2);
-  $('chartHint').textContent=`band [${M.low}, ${M.high}] · center ${M.center}`;
+  // keep the opening price inside the band the book is actually built in
+  if(params.start!=null)
+    params.start=rt(Math.min(Math.max(params.start,params.low),params.high-TICK));
+  $('chartHint').textContent=chartHint();
   F=simulate(params); setMaxSize(F);
   scrub.max=Math.max(0,F.length-1);
   if(cur>F.length-1) cur=F.length-1;
@@ -598,6 +669,27 @@ $('cLow').addEventListener('change',e=>{const v=+e.target.value;
   if(v<params.high){params.low=rt(v);regenerate();}else e.target.value=params.low;});
 $('cHigh').addEventListener('change',e=>{const v=+e.target.value;
   if(v>params.low){params.high=rt(v);regenerate();}else e.target.value=params.high;});
+// Editing the opening price: if it lands outside the band, slide the band along
+// with it (same width) rather than silently snapping the price back.
+$('cStart').addEventListener('change',e=>{
+  const raw=e.target.value;
+  if(raw===''){params.start=null;regenerate();return;}
+  const v=rt(+raw);
+  if(!isFinite(v)){syncDisplays();return;}
+  if(v<params.low||v>params.high-TICK){
+    const w=params.high-params.low;
+    params.low=rt(v-w/2); params.high=rt(v+w/2);
+  }
+  params.start=v; regenerate();
+});
+$('resetStart').addEventListener('click',()=>{
+  if(PRIOR_CLOSE===null) return;
+  const w=params.high-params.low;
+  if(PRIOR_CLOSE<params.low||PRIOR_CLOSE>params.high-TICK){
+    params.low=rt(PRIOR_CLOSE-w/2); params.high=rt(PRIOR_CLOSE+w/2);
+  }
+  params.start=PRIOR_CLOSE; regenerate();
+});
 $('cSeed').addEventListener('change',e=>{params.seed=+e.target.value|0;regenerate();});
 $('reseed').addEventListener('click',()=>{params.seed=Math.floor(Math.random()*1000000);regenerate();});
 document.querySelectorAll('.presets button').forEach(b=>b.addEventListener('click',()=>{
@@ -606,7 +698,48 @@ $('copyCli').addEventListener('click',async()=>{
   try{await navigator.clipboard.writeText(cliString());}catch(e){}
   const t=$('toast');t.classList.add('show');setTimeout(()=>t.classList.remove('show'),1400);});
 
+// ---- product chooser ----
+// Switching product changes tick size, channel, multicast feed and the prior
+// close, so the authoritative session is regenerated server-side: reload with
+// ?product=. Price-specific params are dropped; dynamics are carried over.
+(function initProductPicker(){
+  const sel = $('cProduct');
+  const cat = M.products || [];
+  $('brandTitle').textContent = `${M.product} Feed Simulator`;
+  $('contractHint').textContent =
+    `${M.contract} · front month · last trade ${M.expiry} · ch ${M.channel}`;
+  document.title = `${M.product} ${M.symbol} — MDP 3.0 Feed Simulator`;
+
+  if(!cat.length){ sel.innerHTML = `<option>${M.product}</option>`; sel.disabled = true; return; }
+  const groups = [];
+  for(const p of cat){ if(!groups.includes(p.group)) groups.push(p.group); }
+  sel.innerHTML = groups.map(g =>
+    `<option disabled>── ${g} ──</option>` +
+    cat.filter(p => p.group === g).map(p =>
+      `<option value="${p.code}"${p.code===M.product?' selected':''}>` +
+      `${p.code} — ${p.label} (${p.symbol})</option>`).join('')
+  ).join('');
+
+  if(location.protocol === 'file:'){
+    // a static dashboard has no server to regenerate against
+    sel.disabled = true;
+    sel.title = 'Static dashboard — rebuild with: python3 build_dashboard.py --product <CODE>';
+    return;
+  }
+  sel.addEventListener('change', () => {
+    const q = new URLSearchParams(location.search);
+    q.set('product', sel.value);
+    // these are priced in the old product's units
+    ['start','low','high','band'].forEach(k => q.delete(k));
+    for(const [k,v] of Object.entries({volatility:params.volatility,
+        reversion:params.reversion, jump_prob:params.jumpProb,
+        jump_size:params.jumpSize, seed:params.seed})) q.set(k, v);
+    location.search = q.toString();
+  });
+})();
+
 markPreset('normal');
+$('cStart').step = $('cLow').step = $('cHigh').step = M.tick;
 syncDisplays();
 renderWire();show(0);
 </script>

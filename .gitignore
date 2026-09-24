@@ -11,5 +11,12 @@ venv/
 session.json
 dashboard.html
 
+# Cached prior-session closes (re-fetched by settlement.py)
+.prior_close_cache.json
+
+# CME's full config.xml — download it yourself (CME login required); the
+# committed schema/config.sample.xml is the fallback.
+schema/config.xml
+
 # OS
 .DS_Store

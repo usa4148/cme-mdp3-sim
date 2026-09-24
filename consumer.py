@@ -15,6 +15,9 @@ import struct
 
 from packet import parse_packet
 from sbe import Schema
+from pyver import require_python
+
+require_python()
 
 SCHEMA_PATH = os.path.join(os.path.dirname(__file__), "schema", "mdp3.xml")
 DEFAULT_GROUP = "224.0.31.1"
