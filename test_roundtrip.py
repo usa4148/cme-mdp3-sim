@@ -5,6 +5,9 @@ Run: python test_roundtrip.py
 import os
 from sbe import Schema
 from packet import build_packet, parse_packet
+from pyver import require_python
+
+require_python()
 
 SCHEMA_PATH = os.path.join(os.path.dirname(__file__), "schema", "mdp3.xml")
 schema = Schema(SCHEMA_PATH)

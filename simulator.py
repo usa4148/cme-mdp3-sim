@@ -2,14 +2,22 @@
 CME MDP 3.0 ES futures market-data simulator.
 
 Emits wire-accurate SBE-encoded MDP 3.0 packets over UDP multicast: a random
-walk of the E-mini S&P 500 (ES) mid-price bounded to a submitted price range,
-running for a submitted duration.
+walk of a futures mid-price bounded to a submitted price range, running for a
+submitted duration.
+
+--product picks any futures product in CME's config.xml (default ES); that
+choice sets the channel, multicast feed, tick size and tick value, and the
+front-month contract. The walk opens at that product's previous close (fetched
+and cached by settlement.py) unless you pass --start, and the price band is
+derived around that opening price unless you pass --low/--high.
 
 Example:
-    python simulator.py --low 5000 --high 5025 --duration 3600 --rate 20
+    python simulator.py --duration 3600 --rate 20
+    python simulator.py --product CL --duration 3600
+    python simulator.py --start 7772.50 --band 40 --duration 3600
 
-Defaults match CME channel 310 (E-mini S&P 500) Incremental feed A. By default
-the socket is bound to loopback (TTL 0) so packets never leave this machine.
+By default the socket is bound to loopback (TTL 0) so packets never leave this
+machine. Run `python products.py` to list what you can simulate.
 """
 from __future__ import annotations
 
@@ -19,15 +27,17 @@ import socket
 import struct
 import time
 
-from engine import MarketEngine, TICK_VALUE
+from contracts import DEFAULT_PRODUCT
+from engine import MarketEngine
 from packet import build_packet
+from products import get_product
 from sbe import Schema
+from settlement import resolve_start_band
+from pyver import require_python
+
+require_python()
 
 SCHEMA_PATH = os.path.join(os.path.dirname(__file__), "schema", "mdp3.xml")
-
-# CME channel 310 (E-mini S&P 500), Incremental feed A
-DEFAULT_GROUP = "224.0.31.1"
-DEFAULT_PORT = 14310
 
 
 def make_socket(iface: str, ttl: int) -> socket.socket:
@@ -74,10 +84,37 @@ def entries_from_trades(engine, security_id, trades):
     return entries
 
 
+def describe_origin(origin: dict) -> str:
+    """Human-readable provenance for the opening price."""
+    src = origin["source"]
+    if src == "explicit":
+        return "explicit --start"
+    if src == "priorClose":
+        who = f"{origin['symbol']} close {origin['closeDate']}"
+        return who + " — CACHED, may be out of date" if origin["stale"] else who
+    if src == "fallback":
+        return "offline fallback reference level — NOT a quote"
+    if origin["outOfBand"]:
+        return "prior close is outside the band; opening at the center"
+    return "no prior close available; opening at the band center"
+
+
 def main():
     ap = argparse.ArgumentParser(description="CME MDP 3.0 ES market-data simulator")
-    ap.add_argument("--low", type=float, required=True, help="lower price bound")
-    ap.add_argument("--high", type=float, required=True, help="upper price bound")
+    ap.add_argument("--product", default=DEFAULT_PRODUCT,
+                    help="CME product code from config.xml (default ES)")
+    ap.add_argument("--low", type=float, default=None,
+                    help="lower price bound (default: derived from --start)")
+    ap.add_argument("--high", type=float, default=None,
+                    help="upper price bound (default: derived from --start)")
+    ap.add_argument("--start", type=float, default=None,
+                    help="opening price (default: previous session's ES close)")
+    ap.add_argument("--band", type=float, default=None,
+                    help="width of the band derived around --start (default: 100 ticks)")
+    ap.add_argument("--offline", action="store_true",
+                    help="never fetch the prior close; use the cache only")
+    ap.add_argument("--refresh", action="store_true",
+                    help="re-fetch the prior close even if cached")
     ap.add_argument("--duration", type=float, default=60, help="run time in seconds")
     ap.add_argument("--rate", type=float, default=10, help="book updates per second")
     ap.add_argument("--depth", type=int, default=10, help="book depth (levels/side)")
@@ -85,9 +122,12 @@ def main():
     ap.add_argument("--reversion", type=float, default=0.004, help="mean-reversion pull to center")
     ap.add_argument("--jump-prob", type=float, default=0.0, help="per-step probability of a shock")
     ap.add_argument("--jump-size", type=float, default=8.0, help="mean jump magnitude, in ticks")
-    ap.add_argument("--security-id", type=int, default=42003, help="ES instrument security id")
-    ap.add_argument("--group", default=DEFAULT_GROUP, help="multicast group")
-    ap.add_argument("--port", type=int, default=DEFAULT_PORT, help="multicast port")
+    ap.add_argument("--security-id", type=int, default=None,
+                    help="instrument security id (default: the product's)")
+    ap.add_argument("--group", default=None,
+                    help="multicast group (default: the product's incremental feed A)")
+    ap.add_argument("--port", type=int, default=None,
+                    help="multicast port (default: the product's incremental feed A)")
     ap.add_argument("--iface", default="127.0.0.1", help="outbound interface ip")
     ap.add_argument("--ttl", type=int, default=0, help="multicast TTL (0 = this host only)")
     ap.add_argument("--seed", type=int, default=None, help="rng seed (reproducible walk)")
@@ -95,17 +135,41 @@ def main():
     args = ap.parse_args()
 
     schema = Schema(SCHEMA_PATH)
-    engine = MarketEngine(args.low, args.high, depth=args.depth,
+    prod = get_product(args.product)
+    spec, contract, feed = prod.spec, prod.front_month(), prod.incremental
+    security_id = spec.security_id if args.security_id is None else args.security_id
+    group = args.group or feed.ip
+    port = args.port or feed.port
+
+    origin = resolve_start_band(args.start, args.low, args.high, args.band,
+                                product=prod.code, offline=args.offline,
+                                refresh=args.refresh)
+    low, high, start_px = origin["low"], origin["high"], origin["start"]
+    engine = MarketEngine(low, high, depth=args.depth,
                           volatility=args.volatility, reversion=args.reversion,
                           jump_prob=args.jump_prob, jump_size=args.jump_size,
-                          seed=args.seed)
+                          seed=args.seed, start=start_px,
+                          tick=spec.tick, tick_value=spec.tick_value)
     sock = make_socket(args.iface, args.ttl)
-    dest = (args.group, args.port)
+    dest = (group, port)
 
-    print(f"MDP 3.0 ES simulator  channel=310  security_id={args.security_id}")
-    print(f"  range=[{args.low}, {args.high}]  tick=0.25 (${TICK_VALUE}/tick)"
-          f"  center={engine.center}")
-    print(f"  multicast={args.group}:{args.port} via {args.iface} ttl={args.ttl}"
+    d = spec.decimals
+    print(f"MDP 3.0 simulator  {prod.code} {contract.symbol} — {prod.label}")
+    print(f"  channel={prod.channel_id} ({prod.channel_label})"
+          f"  security_id={security_id}")
+    print(f"  contract={contract.label}  last trade {contract.expiry.isoformat()}"
+          f"  (front month)")
+    print(f"  range=[{low:.{d}f}, {high:.{d}f}]  tick={spec.tick:.10g} "
+          f"(${spec.tick_value:.4g}/tick)  center={engine.center:.{d}f}")
+    # the mid sits on a half-tick, so it needs one more decimal than a price
+    print(f"  open={engine.open_bid_px:.{d}f} bid / {engine.mid:.{d + 1}f} mid"
+          f"  ({describe_origin(origin)})")
+    if origin["clamped"]:
+        print(f"  note: start price clamped into the band")
+    if origin["outOfBand"]:
+        print(f"  note: the prior close is outside the band — opening at the "
+              f"band center instead; pass --start to override")
+    print(f"  multicast={group}:{port} via {args.iface} ttl={args.ttl}"
           f"  rate={args.rate}/s  duration={args.duration}s")
     print(f"  schema id={schema.schema_id} version={schema.version}\n")
 
@@ -126,13 +190,13 @@ def main():
         now_ns = time.time_ns()
 
         if incs:
-            entries = entries_from_increments(engine, args.security_id, incs)
+            entries = entries_from_increments(engine, security_id, incs)
             messages.append(schema.encode_message(
                 "MDIncrementalRefreshBook",
                 {"transactTime": now_ns, "matchEventIndicator": ["LastQuoteMsg", "EndOfEvent"]},
                 entries))
         if trades:
-            entries = entries_from_trades(engine, args.security_id, trades)
+            entries = entries_from_trades(engine, security_id, trades)
             messages.append(schema.encode_message(
                 "MDIncrementalRefreshTradeSummary",
                 {"transactTime": now_ns, "matchEventIndicator": ["LastTradeMsg", "EndOfEvent"]},
@@ -146,9 +210,10 @@ def main():
         pkts += 1
         if not args.quiet:
             bb, bo = engine.best_bid(), engine.best_offer()
-            trd = f"  TRADE {trades[0].size}@{trades[0].price} {trades[0].aggressor}" if trades else ""
-            print(f"seq={seq:<6} mid={engine.mid:<8} bid={bb} offer={bo} "
-                  f"len={len(pkt)}B{trd}")
+            trd = (f"  TRADE {trades[0].size}@{trades[0].price:.{d}f} "
+                   f"{trades[0].aggressor}") if trades else ""
+            print(f"seq={seq:<6} mid={engine.mid:<12.{d + 1}f} bid={bb:.{d}f} "
+                  f"offer={bo:.{d}f} len={len(pkt)}B{trd}")
 
     print(f"\nDone. Sent {pkts} packets ({seq} sequenced).")
 
