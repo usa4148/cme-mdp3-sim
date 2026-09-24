@@ -16,7 +16,7 @@ updates around it, and the feed streams as genuine MDP 3.0 packets. The opening
 price is editable everywhere — `--start` on the CLI, a field in the dashboard,
 `?start=` on the URL.
 
-> **New here?** Run the dashboard: `python3 -m venv .venv && .venv/bin/pip install -r requirements.txt`,
+> **New here?** Run the dashboard: `python3.14 -m venv .venv && .venv/bin/pip install -r requirements.txt`,
 > then `.venv/bin/python app.py`, and open <http://127.0.0.1:8000>.
 > For the byte-level design, price model, and diagrams see **[ARCHITECTURE.md](ARCHITECTURE.md)**.
 
@@ -28,8 +28,15 @@ only third-party dependency is `flask`, and only for the dashboard host; the
 simulator, codec, engine, consumer and tests are pure standard library.
 
 ```bash
-python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+python3.14 -m venv .venv && .venv/bin/pip install -r requirements.txt
 ```
+
+Name the interpreter explicitly: a bare `python3` may well be an older build,
+and the venv inherits whichever one created it. If `python3 --version` already
+reports 3.14+, `python3 -m venv .venv` is equivalent.
+
+Everything except the dashboard runs straight from the checkout with no install
+at all — `python3 simulator.py`, `python3 consumer.py`, `python3 products.py`.
 
 ## Why it's wire-accurate
 
@@ -65,7 +72,8 @@ For bit-for-bit production parity, drop in CME's official
 | `app.py`            | Flask app — hosts the dashboard locally, generates real-SBE sessions |
 | `viz_template.html` | Dashboard template (`__SESSION_JSON__` placeholder + live tuner) |
 | `build_dashboard.py`| Bakes a static, serverless `dashboard.html` from the template |
-| `dashboard.html`    | Pre-built static dashboard (generated; open with no server) |
+| `dashboard.html`    | Static dashboard — *generated* by `build_dashboard.py`, not in the repo |
+| `session.json`      | Recorded session JSON — *generated*, not in the repo |
 | `test_roundtrip.py` | Wire-correctness tests (encode → bytes → decode) |
 | `test_start_price.py`| Opening-price tests (engine start, band, close lookup) |
 | `test_products.py`  | Product chooser tests (specs, front months, config parsing) |
@@ -198,10 +206,11 @@ Prices snap to the *selected product's* tick grid, so a Japanese Yen close of
 
 ## Dashboard (local Flask app)
 
-The interactive dashboard runs locally. First-time setup (project-local venv):
+The interactive dashboard runs locally, and is the only part that needs the
+venv from [Requirements](#requirements):
 
 ```bash
-python3 -m venv .venv && .venv/bin/pip install flask
+python3.14 -m venv .venv && .venv/bin/pip install -r requirements.txt
 ```
 
 Run it:
