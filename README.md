@@ -55,11 +55,8 @@ actually got:
 Python exports none of those socket constants on *either* platform, which is why
 `ptp.py` carries them by value.
 
-**Windows is untested and expected not to work** for `consumer.py`: it needs
-`socket.recvmsg()` and `CMSG_SPACE`, which CPython documents as Unix-only (both
-are present on macOS and Linux, and that is where this was checked). Without
-ancillary data there is no path to a kernel timestamp. The simulator, codec,
-engine and dashboard have no such dependency.
+`consumer.py` targets Unix: its kernel timestamping reads ancillary data via
+`socket.recvmsg()`.
 
 ## Why it's wire-accurate
 
