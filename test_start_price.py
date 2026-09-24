@@ -11,9 +11,12 @@ from datetime import datetime, timezone
 
 from engine import TICK, MarketEngine
 from record_session import build_session
+import threading
+
 from contracts import get_spec
-from settlement import (PriorClose, band_around, parse_chart_payload,
-                        prior_close, resolve_start_band, _write_cache)
+from settlement import (PriorClose, band_around, parse_chart_payload, prefetch,
+                        prior_close, resolve_start_band, _load_cache_file,
+                        _write_cache)
 from pyver import require_python
 
 require_python()
@@ -238,6 +241,47 @@ def test_stale_format_cache_is_discarded():
 def test_prior_close_offline_without_cache_is_none():
     assert prior_close(offline=True, cache_path=MISSING_CACHE) is None
     print("ok  offline with no cache returns None instead of raising")
+
+
+# --------------------------------------------------------------- concurrency ----
+def test_prefetch_returns_every_symbol():
+    """Offline prefetch against a seeded cache — no network, all symbols back."""
+    path = os.path.join(tempfile.mkdtemp(), "cache.json")
+    symbols = ["ES=F", "CL=F", "GC=F", "ZN=F", "6J=F"]
+    for i, sym in enumerate(symbols):
+        _write_cache(path, PriorClose(100.0 + i, "2026-09-23", sym, "yahoo"))
+    got = prefetch(symbols, offline=True, refresh=True, cache_path=path)
+    assert set(got) == set(symbols), got
+    assert all(pc is not None for pc in got.values()), got
+    assert got["GC=F"].price == 102.0, got["GC=F"]
+    assert prefetch([], offline=True, cache_path=path) == {}
+    # duplicates collapse to one lookup each
+    assert set(prefetch(["ES=F", "ES=F"], offline=True, refresh=True,
+                        cache_path=path)) == {"ES=F"}
+    print(f"ok  prefetch returns all {len(symbols)} symbols offline")
+
+
+def test_concurrent_cache_writes_lose_nothing():
+    """The cache is read-modify-write; threads must not clobber each other."""
+    path = os.path.join(tempfile.mkdtemp(), "cache.json")
+    symbols = [f"T{i}=F" for i in range(40)]
+    barrier = threading.Barrier(len(symbols))
+
+    def writer(sym, price):
+        barrier.wait()                      # maximize the overlap
+        _write_cache(path, PriorClose(price, "2026-09-23", sym, "yahoo"))
+
+    threads = [threading.Thread(target=writer, args=(s, float(i)))
+               for i, s in enumerate(symbols)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+    stored = _load_cache_file(path)
+    missing = sorted(set(symbols) - set(stored))
+    assert not missing, f"{len(missing)} entries lost to a write race: {missing[:5]}"
+    assert stored["T7=F"]["price"] == 7.0, stored["T7=F"]
+    print(f"ok  {len(symbols)} concurrent cache writes all survived")
 
 
 # ------------------------------------------------------------------ session ----

@@ -31,7 +31,7 @@ from contracts import DEFAULT_PRODUCT, get_spec
 from products import product_catalog
 from record_session import build_session
 from settlement import prior_close
-from pyver import require_python
+from pyver import require_python, runtime_banner
 
 require_python()
 
@@ -144,5 +144,8 @@ if __name__ == "__main__":
         print("WARNING: binding to 0.0.0.0 — the dashboard is reachable by anyone on "
               "your network (no auth). Use only on a trusted LAN.")
     shown = "127.0.0.1" if args.host in ("127.0.0.1", "0.0.0.0") else args.host
-    print(f"ES Feed Simulator → http://{shown}:{args.port}")
-    app.run(host=args.host, port=args.port, debug=args.debug)
+    print(f"MDP 3.0 Feed Simulator → http://{shown}:{args.port}")
+    print(f"  {runtime_banner()}")
+    # Each page load runs a full simulation, so serve requests on threads:
+    # otherwise one slow session build blocks every other request behind it.
+    app.run(host=args.host, port=args.port, debug=args.debug, threaded=True)

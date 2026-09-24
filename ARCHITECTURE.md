@@ -40,7 +40,9 @@ flowchart LR
     SIM -->|dicts| SBE
     SBE -->|SBE message bytes| PKT[packet.py<br/>packet framing]
     PKT -->|UDP datagram| MC(((UDP multicast<br/>224.0.31.1:14310)))
-    MC --> CON[consumer.py]
+    MC --> CON[consumer.py<br/>rx thread: stamp + enqueue]
+    PTP[ptp.py<br/>PTP timestamps] --> CON
+    CON --> QUE[(bounded queue)] --> DEC[decode + stats<br/>main thread]
     SCH --> SBE2[sbe.py]
     CON --> SBE2 -->|decoded dicts| OUT[stdout / verification]
 
@@ -76,7 +78,9 @@ Two paths share the same engine and codec:
 | `engine.py` | The `MarketEngine`: bounded random walk of the price, book maintenance, and generation of incremental MD entries + trades. Tick size and tick value are per-instance. |
 | `contracts.py` | Contract economics per product (tick, tick value, contract cycle, expiry rule, reference level) and the date arithmetic that picks a front month. |
 | `products.py` | Parses CME's `config.xml` and joins it to `contracts.py`, yielding a `Product` with its channel, multicast feeds, security id and front-month contract. |
-| `settlement.py` | Resolves where the walk opens: the product's prior close (fetched + cached, stdlib only) and the band derived around it. |
+| `settlement.py` | Resolves where the walk opens: the product's prior close (fetched + cached, stdlib only) and the band derived around it. `prefetch()` warms many symbols concurrently. |
+| `ptp.py` | IEEE 1588 receive timestamping: kernel capture where available, TAI formatting, the 10-byte on-wire Timestamp, and latency statistics. |
+| `pyver.py` | The Python 3.14 floor, enforced by every entry point. |
 | `simulator.py` | Wires engine → codec → packet → UDP multicast socket. CLI-configurable. |
 | `consumer.py` | Joins the multicast group, parses packets, decodes every SBE message, prints/validates. Detects sequence gaps. |
 | `record_session.py` | `build_session()` — runs a session, encodes+decodes, returns a compact timeline dict. Reused by the app and build script. |
@@ -312,9 +316,68 @@ With ~35% probability per step a marketable order crosses the touch, producing a
 
 ---
 
-## 8. Visualization
+## 8. Receive path & timestamping (`consumer.py`, `ptp.py`)
 
-### 8.1 Recorded timeline
+### 8.1 Two threads, one queue
+
+```
+ rx thread                    bounded queue                 main thread
+ ─────────                    ─────────────                 ───────────
+ recvmsg  ──►  timestamp  ──►  put_nowait  ──►  get  ──►  parse → decode → stats
+    ▲                              │
+    └──── never blocked ───────────┘  full ⇒ drop + count
+```
+
+The receive thread does nothing but `recvmsg`, stamp and enqueue. This is not
+decoration: while a single-threaded handler is decoding it is not receiving, so
+the next packet either waits in the socket buffer — inflating the latency that
+packet will later appear to have — or is dropped by the kernel. Splitting them
+means the timestamp records when the packet *arrived*, not when the decoder got
+round to it.
+
+The queue is bounded and overruns are counted rather than absorbed: an unbounded
+queue would turn a slow decoder into unbounded memory growth and silently
+falsify the latency distribution. `--no-threads` runs the inline path for
+comparison.
+
+`recvmsg` releases the GIL, so this split helps on a stock interpreter; on a
+free-threaded 3.14 build the decode side runs genuinely in parallel. The banner
+reports which build is running.
+
+### 8.2 Getting a timestamp
+
+Python does not export the timestamping socket constants on every platform, so
+`ptp.py` carries them by value and probes in order: `SO_TIMESTAMPNS` (Linux,
+`timespec`, nanoseconds) → `SO_TIMESTAMP` (BSD/macOS `timeval` with a 4-byte
+`tv_usec`, Linux with 8, microseconds) → a userspace clock read. Whatever it
+gets, `ClockSource.describe()` states the mechanism, whether it came from the
+kernel, and the resolution actually measured on this host — the advertised
+option means little if the OS clock only advances in microsecond steps.
+
+When nothing is available, `synthesize_ancdata()` fabricates the exact control
+message the kernel would have attached. The parsing path is then identical on a
+machine that cannot timestamp, which is how the tests cover it everywhere — and
+the output is labelled `FABRICATED` so a synthesized capture is never mistaken
+for a real one.
+
+### 8.3 PTP semantics
+
+PTP counts from the 1970 epoch on the **TAI** timescale, which leads UTC by a
+whole number of leap seconds (37 since 2017). `format_ptp()` applies that offset,
+and `encode_ptp_timestamp()` produces the 10-byte IEEE 1588 `Timestamp`: 48-bit
+seconds plus 32-bit nanoseconds, big-endian.
+
+**This is PTP formatting and measurement, not PTP sync.** No grandmaster
+disciplines this host's clock. Transit — `rx timestamp − sendingTime` — is only
+meaningful when both ends share a time source; across unsynchronized hosts it is
+dominated by clock offset, and the consumer says so when the median goes
+negative.
+
+---
+
+## 9. Visualization
+
+### 9.1 Recorded timeline
 
 `build_session()` returns:
 
@@ -346,7 +409,7 @@ delta (`+0.38 vs prev close`).
 Every field in `frames` was produced by **decoding the encoded bytes**, so the
 ladder, tape, and chart reflect the wire, not the engine's private state.
 
-### 8.2 Live tuner
+### 9.2 Live tuner
 
 The dashboard contains a faithful **JavaScript port of `engine.py`** (same OU +
 jump math, reflection, book diff, and trade logic; a seeded `mulberry32` RNG with
@@ -366,7 +429,7 @@ which is why **Copy simulator command** emits the matching `simulator.py` flags.
 
 ---
 
-## 9. Extending it
+## 10. Extending it
 
 - **Production parity:** replace `schema/mdp3.xml` with CME's official
   `templates_FixBinary.xml`. The codec adapts; add any new message names you emit.
@@ -377,6 +440,10 @@ which is why **Copy simulator command** emits the matching `simulator.py` flags.
   mirror it in the JS `simulate()` + a slider in `viz_template.html`.
 - **Snapshot/recovery:** add `SnapshotFullRefreshOrderBook` (template 52) on a
   separate cadence, and A/B feed arbitration in the consumer.
+- **Hardware timestamps:** on Linux with a PTP-capable NIC, add
+  `SO_TIMESTAMPING` (37) with `SOF_TIMESTAMPING_RX_HARDWARE` to the probe list in
+  `ptp.py`; it yields a three-`timespec` control message. Everything downstream
+  already works in nanoseconds.
 - **New product:** add a `ContractSpec` to `contracts.py` (tick, tick value,
   contract cycle, expiry rule, Yahoo symbol). Its channel and multicast feed come
   from `config.xml` automatically — nothing else to wire.
@@ -385,7 +452,7 @@ which is why **Copy simulator command** emits the matching `simulator.py` flags.
 
 ---
 
-## 10. Fidelity: faithful vs. simplified
+## 11. Fidelity: faithful vs. simplified
 
 **Faithful:** little-endian SBE; packet header + size-prefixed framing; 8-byte
 SBE header; CME's 3-byte group dimension; int64 mantissa prices at exponent -7;
@@ -399,4 +466,5 @@ IDs); no implied/spread markets, security definitions, or snapshot/recovery
 channel; the price process is a statistical model, not real order-flow matching.
 Security IDs are synthetic rather than read from the definition feed, expiry
 rules ignore exchange holidays, and treasuries are quoted decimally rather than
-in 32nds. Drop in the official schema and add messages to close the gap.
+in 32nds. Timestamps are PTP-formatted but not PTP-disciplined, and are software
+timestamps — kernel where the platform allows, never NIC hardware. Drop in the official schema and add messages to close the gap.

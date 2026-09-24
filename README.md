@@ -20,6 +20,17 @@ price is editable everywhere — `--start` on the CLI, a field in the dashboard,
 > then `.venv/bin/python app.py`, and open <http://127.0.0.1:8000>.
 > For the byte-level design, price model, and diagrams see **[ARCHITECTURE.md](ARCHITECTURE.md)**.
 
+## Requirements
+
+**Python 3.14 or newer** — check with `python3 --version`. Every entry point
+enforces it (see `pyver.py`) rather than failing later on something obscure. The
+only third-party dependency is `flask`, and only for the dashboard host; the
+simulator, codec, engine, consumer and tests are pure standard library.
+
+```bash
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+```
+
 ## Why it's wire-accurate
 
 The SBE codec (`sbe.py`) is **schema-driven** — the exact byte layout lives in
@@ -47,7 +58,9 @@ For bit-for-bit production parity, drop in CME's official
 | `schema/config.sample.xml` | Committed fallback extract of the above |
 | `settlement.py`     | Looks up & caches the prior session's close; derives the band |
 | `simulator.py`      | Main sender — encodes MDP 3.0 packets, UDP multicast |
-| `consumer.py`       | Receiver/decoder — proves the wire by reconstructing from bytes |
+| `consumer.py`       | Receiver/decoder — proves the wire; PTP timestamps, threaded receive |
+| `ptp.py`            | IEEE 1588 receive timestamping, TAI formatting, latency stats |
+| `pyver.py`          | Python version floor, shared by every entry point |
 | `record_session.py` | Records a session to JSON (`build_session()` reused by the app) |
 | `app.py`            | Flask app — hosts the dashboard locally, generates real-SBE sessions |
 | `viz_template.html` | Dashboard template (`__SESSION_JSON__` placeholder + live tuner) |
@@ -56,6 +69,7 @@ For bit-for-bit production parity, drop in CME's official
 | `test_roundtrip.py` | Wire-correctness tests (encode → bytes → decode) |
 | `test_start_price.py`| Opening-price tests (engine start, band, close lookup) |
 | `test_products.py`  | Product chooser tests (specs, front months, config parsing) |
+| `test_timestamps.py`| Timestamping + threaded receive tests (real kernel or faked) |
 | `requirements.txt`  | Python deps (only `flask`, for `app.py`) |
 | `ARCHITECTURE.md`   | Byte-level wire format, codec design, price model, diagrams |
 
@@ -237,6 +251,76 @@ http://127.0.0.1:8000/?start=7772.50&band=40
 `GET /api/products` lists the chooser's products, and
 `GET /api/prior-close?product=GC` returns the close a product starts from.
 
+## Timestamps & latency
+
+`consumer.py` behaves like a real feed handler. Every datagram is stamped as
+close to the wire as the platform allows and reported on the IEEE 1588 (PTP)
+TAI timescale, and transit is measured against the `sendingTime` in the packet
+header:
+
+```bash
+python3 consumer.py --summary
+python3 consumer.py --product CL --summary     # follow a different feed
+```
+
+```
+Listening on 224.0.31.1:14310 (iface 127.0.0.1)  schema id=1 v13
+  clock  SO_TIMESTAMP (kernel, 1µs resolution)
+  Python 3.14.3 (GIL)  ·  receive thread + decode thread
+
+seq=1      ptp=1790290256.335946000  transit=  214.0µs  2 msg [Book,TradeSummary] 732B
+seq=2      ptp=1790290256.461729000  transit=  253.0µs  1 msg [Book] 676B
+...
+Received 12 packets in 1.38s  ·  0 sequence gap(s)
+  clock         SO_TIMESTAMP (kernel, 1µs resolution)
+  PTP epoch     TAI (UTC + 37s) — this is PTP formatting and measurement, not grandmaster sync
+  transit: min 214.0µs  p50 560.0µs  p99 680.0µs  max 680.0µs  mean 498.6µs
+  inter-arrival: min 123.98ms  p50 125.06ms  p99 126.03ms  max 126.03ms
+  jitter        968.0µs (p99 - p50 of inter-arrival)
+```
+
+### Where the timestamp comes from
+
+`--clock` picks the source; `auto` takes the best available and always reports
+what it actually got:
+
+| Platform | Mechanism | Payload | Resolution |
+|----------|-----------|---------|-----------|
+| Linux | `SO_TIMESTAMPNS` | `struct timespec` | nanoseconds |
+| macOS / BSD | `SO_TIMESTAMP` | `struct timeval` | microseconds |
+| anywhere | userspace clock read after `recvmsg` | — | clock resolution |
+| anywhere | `--clock synthetic` | fabricated control message | clock resolution |
+
+Python does not export these socket constants on every platform, so `ptp.py`
+supplies them by value. **If the running kernel cannot timestamp, it is faked:**
+`--clock synthetic` fabricates exactly the control message the kernel would have
+attached, so the parsing and measurement path is identical — and every line of
+output labels it `FABRICATED`. That is also how the tests cover the feature on
+machines with no kernel support.
+
+This is PTP *formatting and measurement*, **not** PTP *sync*: nothing disciplines
+this host's clock to a grandmaster. Across two hosts without a shared time
+source, transit is dominated by clock offset, and the consumer says so when the
+median goes negative. `--tai-offset` sets the UTC→TAI leap seconds (37 today).
+
+### Threading
+
+The receive thread does nothing but `recvmsg`, stamp and enqueue. Decoding runs
+on the main thread behind a bounded queue, so a slow decoder cannot delay the
+next packet — the mistake that makes a naive handler's latency numbers measure
+its own decoder. Queue overruns are counted the way a real handler counts kernel
+drops, and `--queue` sets the depth. `--no-threads` decodes inline instead, which
+is useful for comparison.
+
+Threads earn their place in two other spots: `settlement.prefetch()` looks up
+many products' closes at once (29 symbols in ~0.4s instead of ~10s serially, with
+a lock around the shared cache file), and the Flask app serves `threaded=True`
+so one slow session build does not block every other request.
+
+```bash
+python3 settlement.py --all          # every product's close, concurrently
+```
+
 ## Quick start
 
 Run the tests:
@@ -245,6 +329,7 @@ Run the tests:
 python3 test_roundtrip.py     # wire: encode -> bytes -> decode
 python3 test_start_price.py   # opening price: engine, band, close lookup
 python3 test_products.py      # products: specs, front months, config parsing
+python3 test_timestamps.py    # PTP timestamps + threaded receive path
 ```
 
 Terminal 1 — start a consumer (joins the multicast group and decodes):
@@ -280,9 +365,12 @@ python3 build_dashboard.py --start 7772.50 --band 40
 --duration --rate --depth --volatility --reversion --jump-prob --jump-size
 --security-id --group --port --iface --ttl --seed --quiet`
 
+`consumer.py`: `--product --group --port --iface --count --summary --clock
+--tai-offset --queue --no-threads`
+
 `products.py`: `--config --group --show`  ·  `contracts.py`: `[codes…]`
 
-`settlement.py`: `--product --symbol --offline --refresh --json`
+`settlement.py`: `--product --symbol --all --offline --refresh --json`
 
 `--group`/`--port`/`--security-id` default to the selected product's values and
 override them when passed.

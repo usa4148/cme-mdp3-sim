@@ -24,8 +24,10 @@ price — pass ``--start`` if you need the exact settle.
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import json
 import os
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -46,6 +48,11 @@ CACHE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                           ".prior_close_cache.json")
 CACHE_TTL = 4 * 3600             # seconds before we try the network again
 CACHE_VERSION = 2                # bump when cached values change meaning
+MAX_FETCH_WORKERS = 8            # polite ceiling on concurrent lookups
+
+# One cache file is shared by every product, and prefetch() writes to it from
+# several threads, so read-modify-write has to be serialized or entries are lost.
+_CACHE_LOCK = threading.RLock()
 DEFAULT_TIMEOUT = 5.0
 USER_AGENT = "cme-mdp3-sim/1.0 (local market-data simulator; stdlib urllib)"
 
@@ -135,7 +142,8 @@ def _load_cache_file(path: str) -> dict:
 
 def _read_cache(path: str, symbol: str) -> tuple[PriorClose | None, float]:
     """Return (cached close for `symbol`, age in seconds)."""
-    entry = _load_cache_file(path).get(symbol)
+    with _CACHE_LOCK:
+        entry = _load_cache_file(path).get(symbol)
     if not isinstance(entry, dict):
         return None, float("inf")
     try:
@@ -152,14 +160,15 @@ def _write_cache(path: str, pc: PriorClose) -> None:
     One file holds every product, so switching products does not evict the
     close already fetched for the last one.
     """
-    symbols = _load_cache_file(path)
-    symbols[pc.symbol] = {"price": pc.price, "date": pc.date,
-                          "fetched_at": time.time()}
-    try:
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump({"version": CACHE_VERSION, "symbols": symbols}, f)
-    except OSError:
-        pass
+    with _CACHE_LOCK:
+        symbols = _load_cache_file(path)
+        symbols[pc.symbol] = {"price": pc.price, "date": pc.date,
+                              "fetched_at": time.time()}
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump({"version": CACHE_VERSION, "symbols": symbols}, f)
+        except OSError:
+            pass
 
 
 def prior_close(symbol: str = DEFAULT_SYMBOL, *, offline: bool = False,
@@ -184,6 +193,34 @@ def prior_close(symbol: str = DEFAULT_SYMBOL, *, offline: bool = False,
         return cached
     _write_cache(cache_path, fresh)
     return fresh
+
+
+def prefetch(symbols, *, offline: bool = False, refresh: bool = False,
+             timeout: float = DEFAULT_TIMEOUT, cache_path: str = CACHE_PATH,
+             max_workers: int = MAX_FETCH_WORKERS) -> dict:
+    """Warm the cache for several symbols at once.
+
+    Each lookup is a blocking HTTPS round trip, so this is I/O-bound and threads
+    help regardless of the GIL — 29 products drop from tens of seconds to about
+    one. Results come back keyed by symbol, with None where nothing was found.
+    """
+    unique = list(dict.fromkeys(symbols))
+    if not unique:
+        return {}
+    workers = max(1, min(max_workers, len(unique)))
+    out: dict = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers,
+                                               thread_name_prefix="close") as pool:
+        futures = {pool.submit(prior_close, sym, offline=offline, refresh=refresh,
+                               timeout=timeout, cache_path=cache_path): sym
+                   for sym in unique}
+        for fut in concurrent.futures.as_completed(futures):
+            sym = futures[fut]
+            try:
+                out[sym] = fut.result()
+            except Exception:              # prior_close swallows its own errors
+                out[sym] = None
+    return out
 
 
 # ----------------------------------------------------- start price + band ----
@@ -274,7 +311,33 @@ def main():
     ap.add_argument("--offline", action="store_true", help="use the cache only")
     ap.add_argument("--refresh", action="store_true", help="ignore a fresh cache")
     ap.add_argument("--json", action="store_true", help="print JSON")
+    ap.add_argument("--all", action="store_true",
+                    help="look up every product's close, concurrently")
     args = ap.parse_args()
+
+    if args.all:
+        from contracts import SPECS
+        t0 = time.time()
+        got = prefetch([sp.yahoo for sp in SPECS.values()],
+                       offline=args.offline, refresh=args.refresh)
+        if args.json:
+            print(json.dumps({sym: (None if pc is None else
+                                    {"price": pc.price, "date": pc.date,
+                                     "source": pc.source, "stale": pc.stale})
+                              for sym, pc in got.items()}, indent=2))
+            return
+        print(f"{'code':<5} {'symbol':<7} {'close':>16} {'date':<12} source")
+        for code, sp in SPECS.items():
+            pc = got.get(sp.yahoo)
+            if pc is None:
+                print(f"{code:<5} {sp.yahoo:<7} {'—':>16} {'—':<12} unavailable")
+            else:
+                src = pc.source + (" (stale)" if pc.stale else "")
+                print(f"{code:<5} {sp.yahoo:<7} {pc.price:>16.7g} {pc.date:<12} {src}")
+        ok = sum(1 for pc in got.values() if pc is not None)
+        print(f"\n{ok}/{len(got)} symbols in {time.time() - t0:.2f}s "
+              f"(up to {MAX_FETCH_WORKERS} concurrent lookups)")
+        return
 
     spec = get_spec(args.product) if args.product else None
     symbol = args.symbol or (spec.yahoo if spec else DEFAULT_SYMBOL)
