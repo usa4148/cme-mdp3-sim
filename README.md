@@ -38,6 +38,29 @@ reports 3.14+, `python3 -m venv .venv` is equivalent.
 Everything except the dashboard runs straight from the checkout with no install
 at all — `python3 simulator.py`, `python3 consumer.py`, `python3 products.py`.
 
+### Platforms
+
+Verified on **macOS** (Apple Silicon) and **Linux** (aarch64, `python:3.14-slim`):
+all four test suites, multicast end to end, the network lookup, the static build
+and the Flask dashboard.
+
+The visible difference is timestamp quality, and each run reports what it
+actually got:
+
+| | mechanism | resolution measured |
+|---|---|---|
+| Linux | `SO_TIMESTAMPNS` | ~41ns |
+| macOS | `SO_TIMESTAMP` | 1µs |
+
+Python exports none of those socket constants on *either* platform, which is why
+`ptp.py` carries them by value.
+
+**Windows is untested and expected not to work** for `consumer.py`: it needs
+`socket.recvmsg()` and `CMSG_SPACE`, which CPython documents as Unix-only (both
+are present on macOS and Linux, and that is where this was checked). Without
+ancillary data there is no path to a kernel timestamp. The simulator, codec,
+engine and dashboard have no such dependency.
+
 ## Why it's wire-accurate
 
 The SBE codec (`sbe.py`) is **schema-driven** — the exact byte layout lives in
