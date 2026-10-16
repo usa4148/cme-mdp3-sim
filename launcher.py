@@ -104,7 +104,9 @@ def up(argv: list[str]) -> int:
                     help="schema the simulator sends (cme|subset); receivers auto-detect")
     ap.add_argument("--consumer", action="store_true",
                     help="run the consumer in the foreground (implied by --no-ladder)")
-    ap.add_argument("--iface", default="127.0.0.1", help="interface for every tool")
+    ap.add_argument("--iface", default="127.0.0.1",
+                    help="interface for every tool; receivers take a comma-separated list, "
+                         "the simulator/replay send on the first")
     ap.add_argument("--ttl", type=int, default=0, help="simulator / replay multicast TTL")
     ap.add_argument("--loss-a", type=float, default=0.0, help="drop this fraction of feed A")
     ap.add_argument("--loss-b", type=float, default=0.0, help="drop this fraction of feed B")
@@ -113,11 +115,17 @@ def up(argv: list[str]) -> int:
     args = ap.parse_args(argv)
 
     products = args.products
+    sys.path.insert(0, HERE)
+    from receiver import first_iface, parse_ifaces
+    try:
+        args.iface = ",".join(parse_ifaces(args.iface))
+    except ValueError as e:
+        ap.error(str(e))
+    send_iface = first_iface(args.iface)
     children: list[Child] = []
     foreground = None
     try:
         if args.capture:
-            sys.path.insert(0, HERE)
             import s3store
             s3store.load_env_file()
             cap = tool("capture") + ["--product", products, "--iface", args.iface,
@@ -130,13 +138,13 @@ def up(argv: list[str]) -> int:
 
         if args.replay:
             src = tool("replay") + [args.replay, "--speed", str(args.speed),
-                                    "--product", products, "--iface", args.iface,
+                                    "--product", products, "--iface", send_iface,
                                     "--ttl", str(args.ttl)]
             name = "replay"
         else:
             src = tool("sim") + ["--product", products, "--rate", str(args.rate),
                                  "--duration", str(args.duration or 10 ** 9),
-                                 "--iface", args.iface, "--ttl", str(args.ttl),
+                                 "--iface", send_iface, "--ttl", str(args.ttl),
                                  "--loss-a", str(args.loss_a), "--loss-b", str(args.loss_b),
                                  "--quiet"]
             if args.offline:

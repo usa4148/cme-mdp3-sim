@@ -35,7 +35,7 @@ from feedhandler import INCREMENTAL, INSTRUMENT, KINDS, SNAPSHOT, FeedHandler
 from lifecycle import stop_on_signals
 from products import get_product, parse_product_list
 from ptp import ANC_BUFSIZE, enable_rx_timestamps, receive_timestamp
-from receiver import join_group
+from receiver import join_group, parse_ifaces
 from pyver import require_python
 
 require_python()
@@ -106,7 +106,8 @@ def main() -> int:
     ap.add_argument("--feeds", default="AB", choices=("AB", "A", "B"))
     ap.add_argument("--join", action="append", metavar="GROUP:PORT",
                     help="also capture this group (repeatable)")
-    ap.add_argument("--iface", default="0.0.0.0", help="local interface IP to receive on")
+    ap.add_argument("--iface", default="0.0.0.0",
+                    help="interface IP(s) to receive on, comma-separated (e.g. 127.0.0.1,10.1.2.3)")
     ap.add_argument("--interval", type=float, default=3.0, help="flush period in seconds")
     ap.add_argument("--local-dir", default=None, help="also/instead write .pcap files here")
     ap.add_argument("--env-file", default=s3store.DEFAULT_ENV)
@@ -115,6 +116,10 @@ def main() -> int:
     ap.add_argument("--usec", action="store_true", help="microsecond pcap timestamps")
     args = ap.parse_args()
     stop_on_signals()
+    try:
+        args.iface = ",".join(parse_ifaces(args.iface))
+    except ValueError as e:
+        ap.error(str(e))
 
     s3store.load_env_file(args.env_file)
     if not s3store.configured() and not args.local_dir:

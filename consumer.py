@@ -48,7 +48,7 @@ from dataclasses import dataclass
 from feedhandler import KINDS, SHORT, FeedHandler
 from packet import parse_packet
 from products import get_product, parse_product_list
-from receiver import join_group  # noqa: F401  (kept importable from here)
+from receiver import join_group, parse_ifaces
 from wire import add_schema_argument, open_wire
 from ptp import (ANC_BUFSIZE, DEFAULT_TAI_OFFSET, ClockSource, LatencyStats,
                  enable_rx_timestamps, fmt_ns, format_ptp, format_wall,
@@ -415,7 +415,8 @@ def main():
                     help="one group only (incremental A), no feed handler")
     ap.add_argument("--group", default=None, help="multicast group (implies --raw)")
     ap.add_argument("--port", type=int, default=None, help="multicast port (implies --raw)")
-    ap.add_argument("--iface", default="127.0.0.1")
+    ap.add_argument("--iface", default="127.0.0.1",
+                    help="interface IP(s) to receive on, comma-separated")
     ap.add_argument("--count", type=int, default=0,
                     help="stop after N packets (0 = forever)")
     ap.add_argument("--summary", action="store_true", help="one line per packet")
@@ -430,6 +431,10 @@ def main():
                     help="decode inline instead of on a separate thread")
     args = ap.parse_args()
     stop_on_signals()
+    try:
+        args.iface = ",".join(parse_ifaces(args.iface))
+    except ValueError as e:
+        ap.error(str(e))
 
     try:
         codes = parse_product_list(args.product)

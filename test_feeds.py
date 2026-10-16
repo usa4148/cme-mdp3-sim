@@ -355,6 +355,69 @@ def test_group_bind_isolates_feeds_sharing_a_port():
     print("ok  sockets bound per group: same port, no cross-delivery")
 
 
+def _lan_ipv4():
+    """This host's primary non-loopback IPv4 address, or None."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("192.0.2.1", 9))                  # TEST-NET: no packet is sent
+        addr = s.getsockname()[0]
+        s.close()
+        return None if addr.startswith("127.") else addr
+    except OSError:
+        return None
+
+
+def _send(group, port, iface, payload):
+    tx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    tx.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 0)
+    tx.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, socket.inet_aton(iface))
+    tx.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 1)
+    tx.sendto(payload, (group, port))
+    tx.close()
+
+
+def _recv(sock):
+    try:
+        return sock.recv(100)
+    except (TimeoutError, socket.timeout):
+        return None
+
+
+def test_join_on_several_interfaces():
+    """One socket, memberships on loopback and the LAN interface."""
+    from receiver import parse_ifaces
+    group, port = "239.255.7.7", 39177
+    lan = _lan_ipv4()
+    ifaces = ["127.0.0.1"] + ([lan] if lan else [])
+    assert parse_ifaces(" 127.0.0.1,127.0.0.1 ") == ["127.0.0.1"]
+    try:
+        parse_ifaces("eth0")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("an interface name was accepted as an address")
+    rx = join_group(group, port, ",".join(ifaces), timeout=1.0)
+    try:
+        _send(group, port, "127.0.0.1", b"via-lo")
+        assert _recv(rx) == b"via-lo"
+        note = "no LAN interface"
+        if lan:
+            # does this host deliver its own multicast on the LAN interface at all?
+            probe = join_group(group, port + 1, lan, timeout=1.0)
+            _send(group, port + 1, lan, b"probe")
+            delivered = _recv(probe) == b"probe"
+            probe.close()
+            if delivered:
+                _send(group, port, lan, b"via-lan")
+                assert _recv(rx) == b"via-lan", "membership on the LAN interface missing"
+                note = f"and {lan}"
+            else:
+                note = f"{lan} skipped: this host drops its own multicast there (firewall?)"
+    finally:
+        rx.close()
+    print(f"ok  one socket joined on {len(ifaces)} interface(s): loopback received, {note}")
+
+
 def test_live_multicast_two_channels():
     """Real sockets end to end: publisher -> loopback multicast -> FeedSet."""
     from transport import Transport
@@ -415,6 +478,7 @@ if __name__ == "__main__":
     test_snapshot_and_definition_layout()
     test_product_list()
     test_group_bind_isolates_feeds_sharing_a_port()
+    test_join_on_several_interfaces()
     for WIRE in WIRES:
         print(f"\n— schema: {WIRE.describe()['label']}")
         for t in PER_SCHEMA:

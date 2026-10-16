@@ -14,13 +14,13 @@ after its last viewer leaves, so a page reload doesn't rejoin every group.
 """
 from __future__ import annotations
 
-import ipaddress
 import threading
 import time
 from collections import deque
 
 from feedhandler import KINDS, SHORT, FeedHandler, FeedSet
 from products import get_product, parse_product_list
+from receiver import parse_ifaces
 from wire import open_wire
 
 SNAPSHOT_HZ = 5
@@ -176,7 +176,7 @@ class LiveRegistry:
     @staticmethod
     def key(products, schema, iface, feeds) -> tuple:
         codes = tuple(parse_product_list(products))
-        ipaddress.IPv4Address(iface)                 # ValueError for anything else
+        iface = ",".join(parse_ifaces(iface))         # ValueError for anything else
         if feeds not in ("AB", "A", "B"):
             raise ValueError("feeds must be AB, A or B")
         if schema not in ("auto", "cme", "subset"):
