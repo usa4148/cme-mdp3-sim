@@ -1,7 +1,8 @@
 # Architecture
 
-A technical tour of the CME MDP 3.0 ES market-data simulator: how bytes are
-built, how the price/book model works, and how the dashboard stays honest.
+A technical tour of the CME MDP 3.0 market-data simulator: how bytes are
+built, how the price/book model works, how a channel's feeds are published and
+recovered, how captures are kept and replayed, and how the dashboard stays honest.
 
 ---
 
@@ -37,14 +38,20 @@ flowchart LR
     SET[settlement.py<br/>prior close + band] -->|start, low, high| ENG
     ENG[engine.py<br/>price + book model] -->|increments, trades| SIM[simulator.py]
     SCH[schema/mdp3.xml] --> SBE[sbe.py<br/>schema-driven codec]
-    SIM -->|dicts| SBE
+    SIM --> CHP[channel.py<br/>per channel: incremental,<br/>snapshot, definition loops]
+    CHP -->|dicts| SBE
     SBE -->|SBE message bytes| PKT[packet.py<br/>packet framing]
-    PKT -->|UDP datagram| MC(((UDP multicast<br/>224.0.31.1:14310)))
-    MC --> CON[consumer.py<br/>rx thread: stamp + enqueue]
+    PKT --> TR[transport.py<br/>loss injection + pcap tap]
+    TR -->|same bytes on A and B| MC(((UDP multicast<br/>6 feeds per channel)))
+    TR -.->|--pcap| PCAP[(pcap file)]
+    MC --> CON[consumer.py<br/>rx thread per feed: stamp + enqueue]
     PTP[ptp.py<br/>PTP timestamps] --> CON
-    CON --> QUE[(bounded queue)] --> DEC[decode + stats<br/>main thread]
-    SCH --> SBE2[sbe.py]
-    CON --> SBE2 -->|decoded dicts| OUT[stdout / verification]
+    CON --> QUE[(bounded queue)] --> FH[feedhandler.py<br/>A/B arbitration, rptSeq recovery,<br/>definitions]
+    MC --> LAD[ladder.py<br/>terminal DOM] --> FH
+    MC --> CAP[capture.py] -->|pcap every 3s| S3[(VAST S3 / local dir)]
+    S3 --> RPL[replay.py] --> MC
+    PCAP --> RPL
+    FH --> BK[book.py<br/>per-instrument book]
 
     ENG -.->|record| REC[record_session.py<br/>build_session]
     REC -->|encode+decode<br/>timeline JSON| APP[app.py Flask]
@@ -59,8 +66,11 @@ to the engine.
 
 Two paths share the same engine and codec:
 
-- **Live feed:** `simulator.py` → SBE encode → packet frame → UDP multicast →
-  `consumer.py` decodes and verifies.
+- **Live feed:** `simulator.py` → `channel.py` per channel → SBE encode →
+  packet frame → `transport.py` → UDP multicast (incremental A and B, snapshot,
+  instrument replay) → `consumer.py` / `ladder.py` run it through
+  `feedhandler.py`. `capture.py` keeps it as pcap; `replay.py` puts a capture back
+  on the wire, indistinguishable to every receiver from the live simulator.
 - **Visualization:** `record_session.py` runs the same steps, encodes to SBE,
   **decodes back**, and records a timeline. `app.py` injects it into the
   dashboard template. The in-page tuner re-simulates client-side for instant
@@ -81,28 +91,142 @@ Two paths share the same engine and codec:
 | `settlement.py` | Resolves where the walk opens: the product's prior close (fetched + cached, stdlib only) and the band derived around it. `prefetch()` warms many symbols concurrently. |
 | `ptp.py` | IEEE 1588 receive timestamping: kernel capture where available, TAI formatting, the 10-byte on-wire Timestamp, and latency statistics. |
 | `pyver.py` | The Python 3.14 floor, enforced by every entry point. |
-| `simulator.py` | Wires engine → codec → packet → UDP multicast socket. CLI-configurable. |
-| `consumer.py` | Joins the multicast group, parses packets, decodes every SBE message, prints/validates. Detects sequence gaps. |
+| `simulator.py` | Builds up to four instruments, groups them by channel, and drives one `ChannelPublisher` per channel. CLI-configurable. |
+| `channel.py` | `ChannelPublisher`: steps each instrument's engine and frames incremental packets (one sequence per channel), the snapshot loop and the definition loop onto the channel's feeds. `Instrument` builds templates 52 and 54. |
+| `transport.py` | The one outbound socket: per-feed loss injection, and the pcap tap recording what really went out. |
+| `consumer.py` | Feed handler CLI: one receive thread per feed socket into a bounded queue, `feedhandler.py` on the main thread, PTP transit stats. `--raw` keeps the old one-group decoder. |
+| `feedhandler.py` | `ChannelHandler`: A/B arbitration with a reorder hold, per-instrument `rptSeq` sequencing, snapshot recovery, definitions. `FeedSet` polls a set of sockets on one thread. |
+| `book.py` | MBP book per instrument: incremental apply, snapshot load, ladder rows. |
+| `receiver.py` | Multicast join bound to the group address, so feeds sharing a port stay apart. |
+| `ladder.py` | curses DOM ladder for up to four products on the feed handler. |
+| `capture.py` | Every feed → kernel-timestamped nanosecond pcap windows → S3 and/or disk. |
+| `replay.py` | pcap / pcapng / S3 prefixes → multicast at capture timing; `--dry-run` decodes instead. |
+| `pcap.py` | pcap writer (synthesized Ethernet/IPv4/UDP) and a pcap + pcapng reader for real captures. |
+| `s3store.py` | `config.env` loading, S3 client, `ls`/`get`/`verify`. |
+| `launcher.py`, `mdp3` | `./mdp3 up` orchestration and pass-through to every tool. |
 | `record_session.py` | `build_session()` — runs a session, encodes+decodes, returns a compact timeline dict. Reused by the app and build script. |
 | `app.py` | Flask host. Generates a session per request and serves the dashboard; `/api/session` exposes the raw JSON. |
-| `build_dashboard.py` | Bakes a static, serverless `dashboard.html` from the template + a session. |
-| `viz_template.html` | The dashboard UI (DOM ladder, price chart, tape, wire view) + the live dynamics tuner (a JS port of the model). |
+| `wire.py` | Schema-neutral messages: canonical names ↔ CME's `templates_FixBinary.xml` or the subset, by FIX tag and wire value; mismatch detection; `AutoWire`. |
+| `session.py` | Dashboard sessions: `SessionParams`, `simulate()` (publisher → loss → feed handler), `from_capture()`, the `Recorder` that turns datagrams into session JSON. |
+| `live.py` | `LiveMonitor` (feed handler on real sockets, snapshots at 5 Hz) and the shared `LiveRegistry`. |
+| `app.py` | Flask app factory: dashboard pages, `/api/session`, `.pcap` out, captures in, `/api/live` SSE. |
+| `web/` | Front end: `index.html`, `app.css`, `app.js` (views, modes, tuner) and `engine.js` (CPython-identical RNG + engine). |
+| `build_dashboard.py` | Bakes a static `dashboard.html`: one session, assets inlined. |
 | `test_roundtrip.py` | Asserts encode → bytes → decode is exact, including price scaling and packet framing. |
 
 ---
 
-## 4. Wire format
+## 4. Channels and feeds (`channel.py`)
+
+CME carries each channel on three kinds of feed, each twice:
+
+| feed | template | packet sequence | purpose |
+|------|----------|-----------------|---------|
+| Incremental A/B | 46, 48 | one per channel, shared by its instruments | real time |
+| Snapshot A/B | 52 | restarts at 1 every loop | rebuild a book |
+| Instrument Replay A/B | 54 | restarts at 1 every loop | learn instruments |
+
+A and B carry **byte-identical** datagrams on different groups (channel 310:
+`224.0.31.1:14310` / `224.0.32.1:15310`). A channel's incremental, snapshot and
+instrument feeds on one side share a **port** and differ only by group
+(`224.0.31.1`, `.22`, `.43`, all `:14310`), which is why `receiver.py` binds each
+socket to its group address: a wildcard bind on Linux would receive all three.
+
+Products on one channel interleave on its incremental sequence. Each instrument
+has its own `rptSeq`, incremented once per MD entry it receives (book or
+trade); that per-instrument counter is what makes recovery instrument-level.
+
+**Snapshot (52).** One message per instrument per loop. The root carries
+`lastMsgSeqNumProcessed` (the channel's incremental sequence at that moment),
+`rptSeq` (the instrument's, at that moment) and `totNumReports` (instruments in
+the loop). Entries: every bid and offer level with its `mdPriceLevel`, the last
+trade, session open/high/low, cumulative volume, and the prior settlement when
+the walk opened from one. The band edges are reported as the high/low limit
+prices — the walk can never leave them.
+
+**Definition (54).** Symbol (`ESZ6`), asset, security group, MIC
+(`XCME/XCBT/XNYM/XCEC`), `applId` = channel, maturity, `minPriceIncrement`,
+`priceDisplayFormat`, unit of measure and contract size, tick value,
+`tradingReferencePrice` (the prior close), limits, activation and last-trade
+events, the GBX feed depth, eligibility flags and lot rule. CFI codes and
+product-complex numbers are representative per asset class, not looked up per
+product; event times are plausible shapes, not CME's listing calendar.
+
+Both layouts match `templates_FixBinary.xml` offset for offset; the tests decode
+the simulator's 52/54 output with CME's own file.
+
+---
+
+## 5. Feed handler (`feedhandler.py`)
+
+```
+            ┌──────────── Incremental A ──┐
+ multicast ─┤                              ├─► arbitration ─► per-instrument ─► book
+            └──────────── Incremental B ──┘   (first copy     rptSeq check       │
+                                               wins; hold      │ skip?            │
+                                               ahead-of-seq)   ▼                  │
+            Snapshot A/B ───────────────────────────────► RECOVERING: buffer ─────┘
+                                                          snapshot → load book,
+            Instrument Replay A/B ─► definitions          replay buffer, LIVE
+```
+
+**Arbitration.** For each channel, a datagram with sequence `n`:
+`n ≤ last` is a duplicate (the other feed's copy, already processed);
+`n = last + 1` is processed, then anything held that is now in order;
+`n > last + 1` is held, because its predecessor may still be in flight on the
+slower feed. Held packets are released as a gap when more than `window` (64)
+are waiting or the oldest has waited `hold_ms` (20 ms). Only then is a packet
+*lost on both feeds*. Every sequence's arrival set is kept briefly so the
+report can say how often each feed covered the other.
+
+**Recovery.** An instrument is `waiting` until its first entry: at `rptSeq` 1
+it is live immediately (nothing came before); otherwise it is a late joiner and
+starts `recovering`. A live instrument whose next entry skips ahead goes
+`recovering` and buffers entries. The next snapshot for it with `rptSeq = r`
+replaces the book, buffered entries with `rptSeq > r` are replayed in order, and
+it is `live` again; if the buffer itself has a hole after `r`, it keeps waiting
+for a newer loop. The rest of the channel is unaffected. While live, every
+snapshot whose `rptSeq` equals the book's is compared level by level, so a
+divergence would be reported, not silently carried.
+
+---
+
+## 6. Capture and replay (`pcap.py`, `capture.py`, `replay.py`)
+
+Capture is at the socket layer, so no root and no raw sniffing; `pcap.py`
+synthesizes the frame around each payload — Ethernet with the RFC 1112 multicast
+MAC, IPv4 with a valid header checksum, UDP — from the source address
+`recvmsg` reports and the group/port the socket joined. Files are classic pcap,
+link type EN10MB, nanosecond resolution by default, timestamped with the kernel
+receive time where `ptp.py` can get it. `capture.py` closes a window every
+`--interval` seconds into one self-contained object (S3 key
+`prefix/host/YYYY/MM/DD/mdp3-…Z-mmm.pcap`) so any window is replayable alone.
+
+The reader is not limited to its own files: classic pcap in both byte orders and
+resolutions, pcapng (section/interface/enhanced/simple blocks, `if_tsresol`),
+and the link types real captures use — Ethernet with 802.1Q/QinQ tags, Linux
+cooked v1/v2, raw IPv4, BSD loopback. IP fragments are skipped and counted.
+
+`replay.py` schedules each datagram at `base + (t − t₀ − cut) / speed` against a
+monotonic clock and sends it to its original destination; `--max-gap` folds long
+silences into `cut`. Because snapshot and definition feeds are in the capture
+too, a replay started at any window recovers in the receiver exactly like a late
+join on the live feed.
+
+---
+
+## 7. Wire format
 
 Everything is **little-endian**. A UDP datagram (one "packet") is:
 
-### 4.1 Binary Packet Header (12 bytes)
+### 7.1 Binary Packet Header (12 bytes)
 
 | Offset | Field | Type | Notes |
 |-------:|-------|------|-------|
 | 0 | `MsgSeqNum` | uint32 | Packet sequence number, increments per packet (gap detection). |
 | 4 | `SendingTime` | uint64 | Nanoseconds since the Unix epoch. |
 
-### 4.2 Message framing (repeats)
+### 7.2 Message framing (repeats)
 
 Each message in the packet is preceded by its size:
 
@@ -111,7 +235,7 @@ Each message in the packet is preceded by its size:
 | `MsgSize` | uint16 | Byte length of the SBE message that follows (header + body). |
 | *SBE message* | … | See below. |
 
-### 4.3 SBE message header (8 bytes)
+### 7.3 SBE message header (8 bytes)
 
 | Offset | Field | Type |
 |-------:|-------|------|
@@ -123,7 +247,7 @@ Each message in the packet is preceded by its size:
 The **root block** (`blockLength` bytes) holds the message's fixed fields at
 fixed offsets, with padding to `blockLength`. Repeating groups follow the block.
 
-### 4.4 Repeating-group dimension (3 bytes) — CME-specific
+### 7.4 Repeating-group dimension (3 bytes) — CME-specific
 
 CME overrides the SBE default (which uses uint16 for `numInGroup`):
 
@@ -134,7 +258,7 @@ CME overrides the SBE default (which uses uint16 for `numInGroup`):
 
 Each entry is exactly `blockLength` bytes (fields at fixed offsets + padding).
 
-### 4.5 Prices
+### 7.5 Prices
 
 `PRICE` / `PRICENULL` are `Decimal` composites: an **int64 mantissa** with a
 **constant exponent of -7** (the exponent is metadata, not on the wire). So a
@@ -146,7 +270,7 @@ null sentinel `0x7FFFFFFFFFFFFFFF`.
 5000.25  ->  mantissa 50002500000
 ```
 
-### 4.6 Worked example (a real packet from this sim)
+### 7.6 Worked example (a real packet from this sim)
 
 ```
 0600 0000  00c6 6259 08b3 cc18  9602  0b00 2e00 0100 0d00  ...
@@ -164,7 +288,7 @@ null sentinel `0x7FFFFFFFFFFFFFFF`.
 
 ---
 
-## 5. The SBE codec (`sbe.py`)
+## 8. The SBE codec (`sbe.py`)
 
 `Schema(path)` parses the XML once into typed descriptors:
 
@@ -183,13 +307,22 @@ block, then writes the group dimension + each entry. `decode_message(buf)`
 reverses it and returns `{template, id, root, groups}`. The codec is generic —
 adding a message or field is a schema edit, not a code change.
 
-**Namespace note:** only `<sbe:messageSchema>` and `<sbe:message>` carry the
-`sbe:` prefix; the type system elements (`types`, `composite`, `enum`, `set`,
-`field`, `group`, …) are unprefixed. The parser looks them up accordingly.
+**Beyond the basics.** Fixed-length char arrays (`length="20"`, NUL-padded)
+for symbols and codes; constant fields that occupy no wire space and decode to
+their schema value (`SecurityIDSource` = `8`); optional fields that encode
+`None` as their null sentinel and decode it back; plain composites as dicts
+(`MaturityMonthYear`); any number of repeating groups per message, filled by name
+through `encode_message(..., groups={...})`; and any dimension composite a
+group names.
+
+**Namespace note:** the parser matches elements by local name, so the subset's
+`sbe:` prefix and CME's `ns2:` (a different URI) both load, and an enum's
+`encodingType` may name a type (`uInt8NULL`) rather than a primitive — CME's file
+does both, which is why the codec reads it unchanged.
 
 ---
 
-## 6. Product selection (`products.py`, `contracts.py`)
+## 9. Product selection (`products.py`, `contracts.py`)
 
 Two sources, joined on the product code:
 
@@ -234,7 +367,7 @@ expiry. Expiry rules are shape-faithful to the rulebook but holiday-blind:
 
 ---
 
-## 7. Price & book model (`engine.py`, `settlement.py`)
+## 10. Price & book model (`engine.py`, `settlement.py`)
 
 Tick size and tick value are per-`MarketEngine`, supplied by the selected
 product; they default to ES (tick **0.25**, **$12.50** per tick). Prices are
@@ -242,7 +375,7 @@ snapped with `round_to_tick(px, tick)`, whose outer rounding clears float fuzz �
 a Japanese Yen tick is 0.0000005, fine enough that `n * tick` otherwise lands
 off-grid.
 
-### 7.1 Opening price
+### 10.1 Opening price
 
 The walk opens at `start` — by default the **previous session's close**, which
 `settlement.py` resolves before the engine is constructed:
@@ -275,7 +408,7 @@ to the cache (flagged `stale`), and no cache degrades to a center open.
 > automated access. The Yahoo figure is a consolidated close, not the official
 > CME settlement.
 
-### 7.2 Price path
+### 10.2 Price path
 
 The engine walks the **best bid** on the tick grid; the best offer sits exactly
 one tick above, so the book is never locked or crossed and the mid is the
@@ -299,7 +432,7 @@ always stays inside `[low, high]`. Knobs:
 | `jump_prob` | — | Per-step probability of a gap move. |
 | `jump_size` | — | Mean magnitude of a jump, in ticks. |
 
-### 7.3 Book & increments
+### 10.3 Book & increments
 
 Each step rebuilds the target book: `depth` levels per side, one tick apart,
 with size fattening deeper in the book plus noise, and an order count per level.
@@ -308,7 +441,7 @@ The engine diffs the previous book against the target and emits MD entries with
 **Delete** (level left the book / band). Because sizes are re-drawn each step,
 most levels report **Change** — matching the churn of a real book.
 
-### 7.4 Trades
+### 10.4 Trades
 
 With ~35% probability per step a marketable order crosses the touch, producing a
 `MDIncrementalRefreshTradeSummary` entry at the best bid/offer with an
@@ -316,9 +449,9 @@ With ~35% probability per step a marketable order crosses the touch, producing a
 
 ---
 
-## 8. Receive path & timestamping (`consumer.py`, `ptp.py`)
+## 11. Receive path & timestamping (`consumer.py`, `ptp.py`)
 
-### 8.1 Two threads, one queue
+### 11.1 Two threads, one queue
 
 ```
  rx thread                    bounded queue                 main thread
@@ -344,7 +477,7 @@ comparison.
 free-threaded 3.14 build the decode side runs genuinely in parallel. The banner
 reports which build is running.
 
-### 8.2 Getting a timestamp
+### 11.2 Getting a timestamp
 
 Python does not export the timestamping socket constants on every platform, so
 `ptp.py` carries them by value and probes in order: `SO_TIMESTAMPNS` (Linux,
@@ -360,7 +493,7 @@ machine that cannot timestamp, which is how the tests cover it everywhere — an
 the output is labelled `FABRICATED` so a synthesized capture is never mistaken
 for a real one.
 
-### 8.3 PTP semantics
+### 11.3 PTP semantics
 
 PTP counts from the 1970 epoch on the **TAI** timescale, which leads UTC by a
 whole number of leap seconds (37 since 2017). `format_ptp()` applies that offset,
@@ -375,71 +508,99 @@ negative.
 
 ---
 
-## 9. Visualization
+## 12. Dashboard (`session.py`, `live.py`, `app.py`, `web/`)
 
-### 9.1 Recorded timeline
+### 12.1 One pipeline, three sources
 
-`build_session()` returns:
+```
+simulated:  build_instruments → ChannelPublisher(clock = simulated) → Transport(loss, no socket) ─┐
+capture:    pcap / pcapng → datagrams ────────────────────────────────────────────────────────────┴→ Recorder
+                                                                                                   (FeedHandler)
+live:       FeedSet sockets → FeedHandler → LiveMonitor snapshots → SSE
+```
+
+A simulated session runs the live simulator's own publisher on a simulated clock
+(100 ms per step from a fixed epoch, 1 µs between packets), through the
+transport's loss model with delivery replaced by a recorder. Every datagram —
+including those the loss model dropped, flagged as such — goes to the
+`Recorder`, which feeds it to a `FeedHandler` and records what happened to it
+(processed first copy, duplicate, held for reorder, dropped, snapshot/definition
+loop). After each step it records every tracked instrument's book as the
+*handler* holds it. So a recovery in the session is a real recovery: the book
+the dashboard draws during it is the stale one the handler had.
+
+A capture goes through the same `Recorder`, with frames on time buckets
+(100 ms, or wider to stay under 3,000 frames). Instruments are picked by
+activity — a real channel carries far more than four — and named from their
+definitions when the capture has them, from `contracts.py` when the security id
+is one of the simulator's, else by id with the tick estimated from the book.
+
+Live mode doesn't record: `LiveMonitor` polls the sockets on its own thread and
+publishes a snapshot (books, new trades, state, A/B tallies, per-feed rates, new
+events) five times a second; each `/api/live` client streams them. Monitors are
+keyed by products/schema/interface/feeds and shared, and stop ten seconds after
+their last viewer leaves.
+
+### 12.2 Session JSON (v2)
 
 ```jsonc
-{
-  "meta":  { channel, channelLabel, product, productLabel, group, exchange,
-             symbol, contract, expiry, securityId, multicast,
-             low, high, center, band,
-             start, startSource, closeDate, closeSymbol, startStale,
-             tick, tickValue, decimals, depth,
-             schemaId, schemaVersion, steps, totalBytes,
-             products: [ {code, label, group, exchange, channel, symbol} … ] },
-  "sampleHex":     "…",     // one real packet, hex — drives the annotated wire view
-  "sampleDecoded": [ … ],   // that packet, decoded from the bytes
-  "frames": [ { seq, ts, mid, bestBid, bestOffer, bytes, nMsgs,
-                bids:[[px,size,orders]…], offers:[…], trades:[[px,size,side]…] } … ]
-}
+{ "source":   {"kind": "simulated|capture", "name", "params", "command"},
+  "schema":   {"name", "label", "id", "version", "auto?", "detected?", "layout": {46: {block, groups}}},
+  "channels": [{"id", "label", "feeds": [{kind, feed, ip, port}], "arb": {won, only, lost, …}}],
+  "instruments": [{"code", "symbol", "securityId", "channel", "tick", "decimals",
+                   "low", "high", "start", "startSource", …, "definition", "summary"}],
+  "frames":   [{"t": ms, "i": [{"m", "bb", "bo", "b": [[px,size,orders]], "o", "tr", "s", "r"}]}],
+  "packets":  [[t_ms, channel_index, "I|S|N", "A|B", seq, bytes, "win|dup|held|drop|loop", "46,48"]],
+  "events":   [{"t", "kind", "text"}],
+  "samples":  {"46": {"hex", "segments": [{off, len, path, kind, field, type, value, canonical}]}} }
 ```
 
-`meta.products` is the chooser's catalog, and `meta.decimals` (derived from the
-tick) drives every price the dashboard prints — at two decimals a Yen ladder
-would collapse every level onto one row.
+`segments` come from `Schema.explain()`: a contiguous attribution of every byte
+of the message — header, root fields, padding, group dimensions, entries — with
+the packet header and `MsgSize` prefixes added by the recorder.
 
-`startSource` is `explicit`, `priorClose`, `fallback`, or `center`, and tells the
-dashboard how to label the opening price: with `priorClose` it draws the close as a chip,
-as a dashed reference line on the chart, and as the baseline for the big header
-delta (`+0.38 vs prev close`).
+### 12.3 The in-page engine
 
-Every field in `frames` was produced by **decoding the encoded bytes**, so the
-ladder, tape, and chart reflect the wire, not the engine's private state.
+`web/engine.js` ports `engine.py` *and* CPython's `random.Random`: MT19937 with
+`init_by_array` seeding, the 53-bit `random()`, `gauss()` with its cached second
+value, `uniform`, `expovariate`, and Python's round-half-even and truncating
+`int()`. A preview is therefore the simulator's walk for that seed, not an
+approximation; `test_dashboard.py` runs it under node against `engine.py` (24
+random configurations × 300 steps, books, sizes and trades identical). The one
+caveat is the platform's `cos`/`log`: V8 and libm can differ in the last bit of
+a `gauss()` value, which would only matter if it straddled a rounding boundary.
 
-### 9.2 Live tuner
+The page renders whatever it has — preview frames, the server session, or live
+history — through the same views; preview updates are instant, and the
+authoritative server session (debounced, cancellable) replaces them.
 
-The dashboard contains a faithful **JavaScript port of `engine.py`** (same OU +
-jump math, reflection, book diff, and trade logic; a seeded `mulberry32` RNG with
-Box–Muller for gaussians). Moving a slider re-runs the whole feed in the browser
-in a few milliseconds and redraws everything, including exact packet byte counts
-derived from the framing formula:
+### 12.4 Front-end practice
 
-```
-packet = 12 + Σ over messages ( 2 + 8 + 11 + 3 + 32·entries )
-         └hdr┘        └size┘ └sbe┘ └blk┘└dim┘ └── entries ──┘
-```
-
-The JS model is a **preview** of the dynamics; the Python simulator remains
-authoritative (real SBE bytes on the wire). The two use different RNG algorithms,
-so a seed won't produce byte-identical paths — but the *parameters* map exactly,
-which is why **Copy simulator command** emits the matching `simulator.py` flags.
+The session is embedded as `<script type="application/json">` with `<`, `>`, `&`
+escaped, never interpolated into script; every dynamic string goes through an
+HTML escaper (captures carry arbitrary bytes); the page ships with a
+Content-Security-Policy that allows only its own scripts. State lives in the URL
+(`history.replaceState`), so any view can be bookmarked. Light and dark follow
+the system; motion respects `prefers-reduced-motion`; tabs, the inspector table
+and the drop zone are keyboard reachable.
 
 ---
 
-## 10. Extending it
+## 13. Extending it
 
-- **Production parity:** replace `schema/mdp3.xml` with CME's official
-  `templates_FixBinary.xml`. The codec adapts; add any new message names you emit.
+- **Production parity:** the codec loads CME's official `templates_FixBinary.xml`
+  as is. Emitting it would mean renaming the simulator's fields to CME's
+  (`mdEntryPx` → `MDEntryPx`) and moving 46/48/30 to exponent -9; 52 and 54
+  already match it.
 - **New message type:** add a `<sbe:message>` to the schema, then build the dict
   and call `encode_message(...)`. No codec changes.
 - **New dynamics:** add the knob to `MarketEngine.__init__` and the step math,
-  expose a CLI flag in `simulator.py` / `record_session.py`, and (optionally)
-  mirror it in the JS `simulate()` + a slider in `viz_template.html`.
-- **Snapshot/recovery:** add `SnapshotFullRefreshOrderBook` (template 52) on a
-  separate cadence, and A/B feed arbitration in the consumer.
+  expose it in `channel.build_instruments`, `SessionParams` and the CLI flags,
+  and mirror it in `web/engine.js` (keeping the RNG call order identical — the
+  parity test will tell you) plus a slider in `web/index.html`.
+- **Market by order:** `SnapshotFullRefreshOrderBook` (53) and
+  `MDIncrementalRefreshOrderBook` (47) on the Snapshot-MBO feeds `config.xml`
+  already lists; the engine would need order ids.
 - **Hardware timestamps:** on Linux with a PTP-capable NIC, add
   `SO_TIMESTAMPING` (37) with `SOF_TIMESTAMPING_RX_HARDWARE` to the probe list in
   `ptp.py`; it yields a three-`timespec` control message. Everything downstream
@@ -452,18 +613,26 @@ which is why **Copy simulator command** emits the matching `simulator.py` flags.
 
 ---
 
-## 11. Fidelity: faithful vs. simplified
+## 14. Fidelity: faithful vs. simplified
 
 **Faithful:** little-endian SBE; packet header + size-prefixed framing; 8-byte
-SBE header; CME's 3-byte group dimension; int64 mantissa prices at exponent -7;
+SBE header; CME's 3-byte group dimension; int64 mantissa prices;
 `MDUpdateAction` / `MDEntryType` / `AggressorSide` enums; `MatchEventIndicator`
-bitset; templates 46 / 48 / 30; channels, multicast feeds and product listings
-read from CME's own `config.xml`; real tick sizes and tick values per product.
+bitset; with `--schema cme` (the default when the file is present) every
+template is CME's own layout from CME's own file — 46/48 with exponent -9 prices
+and their order-id groups — and with the subset, 52/54 still match it byte for byte;
+incremental A/B with identical bytes, per-channel sequence shared across
+instruments, per-instrument `rptSeq`, snapshot and instrument-replay loops whose
+sequence restarts each loop; channels, all six multicast feeds and product
+listings read from CME's own `config.xml`; real tick sizes and tick values.
 
 **Simplified (by design):** the schema is a hand-authored subset of CME's, not
-the full production template; the book is Market-by-Price only (no MBO order
-IDs); no implied/spread markets, security definitions, or snapshot/recovery
-channel; the price process is a statistical model, not real order-flow matching.
+the full production template, and its 46/48/30 price at exponent -7 where CME's
+v13 uses -9 (use `--schema cme` for production layout); the book is Market-by-Price only (no MBO order IDs); no
+implied/spread markets, no TCP replay; one incremental packet per instrument per
+step rather than CME's event batching; definitions are sent on the replay loop
+only, not as intraday adds on the incremental feed; the price process is a
+statistical model, not real order-flow matching.
 Security IDs are synthetic rather than read from the definition feed, expiry
 rules ignore exchange holidays, and treasuries are quoted decimally rather than
 in 32nds. Timestamps are PTP-formatted but not PTP-disciplined, and are software

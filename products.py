@@ -88,8 +88,22 @@ class Product:
     @property
     def incremental(self) -> Feed | None:
         """The incremental feed A — what the simulator publishes on."""
-        a = [f for f in self.feeds if f.type == "Incremental" and f.feed_id == "A"]
-        return a[0] if a else next((f for f in self.feeds if f.type == "Incremental"), None)
+        return self.feed("Incremental", "A")
+
+    def feed(self, kind: str, feed_id: str = "A") -> Feed | None:
+        """The channel's `kind` feed (Incremental, Snapshot, Instrument Replay).
+
+        Falls back to the other letter when the config lists only one side.
+        """
+        same = [f for f in self.feeds if f.type == kind]
+        exact = [f for f in same if f.feed_id == feed_id]
+        return exact[0] if exact else (same[0] if same else None)
+
+    def feed_pair(self, kind: str) -> tuple:
+        """(feed A, feed B) for `kind`; B is None when the channel has no B side."""
+        a = self.feed(kind, "A")
+        b = next((f for f in self.feeds if f.type == kind and f.feed_id == "B"), None)
+        return a, (b if b is not a else None)
 
     def front_month(self, today=None):
         return front_month(self.code, today)
@@ -204,6 +218,36 @@ def get_product(code: str | None = None, config_path: str = None) -> Product:
             return p
     known = ", ".join(p.code for p in simulatable(config_path))
     raise ValueError(f"unknown product {code!r}; available: {known}")
+
+
+MAX_PRODUCTS = 4
+
+
+def parse_product_list(spec, limit: int = MAX_PRODUCTS) -> list[str]:
+    """'ES,nq' or ['ES', 'NQ,CL'] -> ['ES', 'NQ', 'CL'], deduped, order kept."""
+    if spec is None:
+        return [DEFAULT_PRODUCT]
+    items = [spec] if isinstance(spec, str) else list(spec)
+    codes = []
+    for item in items:
+        for code in item.split(","):
+            code = code.strip().upper()
+            if code and code not in codes:
+                codes.append(code)
+    if not codes:
+        return [DEFAULT_PRODUCT]
+    if len(codes) > limit:
+        raise ValueError(f"at most {limit} products at once, got {len(codes)}: "
+                         f"{','.join(codes)}")
+    return codes
+
+
+def by_channel(products) -> dict[int, list[Product]]:
+    """Group products by channel. Products on one channel share its feeds."""
+    out: dict[int, list[Product]] = {}
+    for p in products:
+        out.setdefault(p.channel_id, []).append(p)
+    return out
 
 
 def product_catalog(config_path: str = None) -> list:

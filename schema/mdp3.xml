@@ -3,7 +3,9 @@
   CME MDP 3.0 SBE schema (faithful working subset).
 
   This is a hand-authored subset of CME's official templates_FixBinary.xml,
-  covering exactly the messages this simulator emits. The codec (sbe.py) is
+  covering exactly the messages this simulator emits: incremental book (46),
+  trade summary (48), security status (30), snapshot full refresh (52) and the
+  future instrument definition (54). The codec (sbe.py) is
   schema-driven: for bit-for-bit production parity you can replace this file
   with CME's official templates_FixBinary.xml and the codec adapts.
 
@@ -46,7 +48,58 @@
     <type name="uInt32"  primitiveType="uint32"/>
     <type name="uInt8"   primitiveType="uint8"/>
     <type name="Int8"    primitiveType="int8"/>
-    <type name="LocalMktDate" primitiveType="uint16"/>
+    <type name="LocalMktDate" primitiveType="uint16" presence="optional" nullValue="65535"/>
+    <type name="Int16"       primitiveType="int16"/>
+    <type name="Int8NULL"    primitiveType="int8"   presence="optional" nullValue="127"/>
+    <type name="Int32NULL"   primitiveType="int32"  presence="optional" nullValue="2147483647"/>
+    <type name="uInt8NULL"   primitiveType="uint8"  presence="optional" nullValue="255"/>
+    <type name="uInt32NULL"  primitiveType="uint32" presence="optional" nullValue="4294967295"/>
+    <type name="uInt64NULL"  primitiveType="uint64" presence="optional" nullValue="18446744073709551615"/>
+    <type name="CHAR"        primitiveType="char"/>
+
+    <!-- Fixed-length strings (NUL-padded) used by the instrument definition -->
+    <type name="Asset"            primitiveType="char" length="6"/>
+    <type name="CFICode"          primitiveType="char" length="6"/>
+    <type name="Currency"         primitiveType="char" length="3"/>
+    <type name="MDFeedType"       primitiveType="char" length="3"/>
+    <type name="SecurityExchange" primitiveType="char" length="4"/>
+    <type name="SecurityGroup"    primitiveType="char" length="6"/>
+    <type name="SecurityType"     primitiveType="char" length="6"/>
+    <type name="Symbol"           primitiveType="char" length="20"/>
+    <type name="UnitOfMeasure"    primitiveType="char" length="30"/>
+    <type name="UserDefinedInstrument" primitiveType="char" length="1"/>
+
+    <!-- Constants: carried by the schema, zero bytes on the wire -->
+    <type name="SecurityIDSource" primitiveType="char" presence="constant" length="1">8</type>
+    <type name="InstAttribType"   primitiveType="int8" presence="constant">24</type>
+
+    <!-- The snapshot and definition messages price at exponent -9, as CME's do -->
+    <composite name="PRICE9" description="Price, exponent -9">
+      <type name="mantissa" primitiveType="int64"/>
+      <type name="exponent" primitiveType="int8" presence="constant">-9</type>
+    </composite>
+    <composite name="PRICENULL9" description="Optional price, exponent -9">
+      <type name="mantissa" primitiveType="int64" presence="optional" nullValue="9223372036854775807"/>
+      <type name="exponent" primitiveType="int8" presence="constant">-9</type>
+    </composite>
+    <composite name="Decimal9" description="Decimal, exponent -9">
+      <type name="mantissa" primitiveType="int64"/>
+      <type name="exponent" primitiveType="int8" presence="constant">-9</type>
+    </composite>
+    <composite name="Decimal9NULL" description="Optional decimal, exponent -9">
+      <type name="mantissa" primitiveType="int64" presence="optional" nullValue="9223372036854775807"/>
+      <type name="exponent" primitiveType="int8" presence="constant">-9</type>
+    </composite>
+    <composite name="DecimalQty" description="Quantity, exponent -4">
+      <type name="mantissa" primitiveType="int32" presence="optional" nullValue="2147483647"/>
+      <type name="exponent" primitiveType="int8" presence="constant">-4</type>
+    </composite>
+    <composite name="MaturityMonthYear" description="Year, month, day, week">
+      <type name="year"  primitiveType="uint16" presence="optional" nullValue="65535"/>
+      <type name="month" primitiveType="uint8"  presence="optional" nullValue="255"/>
+      <type name="day"   primitiveType="uint8"  presence="optional" nullValue="255"/>
+      <type name="week"  primitiveType="uint8"  presence="optional" nullValue="255"/>
+    </composite>
 
     <!-- Enumerations -->
     <enum name="MDUpdateAction" encodingType="uint8">
@@ -64,7 +117,10 @@
       <validValue name="Trade">2</validValue>
       <validValue name="OpenPrice">4</validValue>
       <validValue name="SettlementPrice">6</validValue>
-      <validValue name="TradeVolume">B</validValue>
+      <validValue name="TradingSessionHighPrice">7</validValue>
+      <validValue name="TradingSessionLowPrice">8</validValue>
+      <validValue name="ClearedVolume">B</validValue>
+      <validValue name="ElectronicVolume">e</validValue>
     </enum>
 
     <enum name="AggressorSide" encodingType="uint8">
@@ -73,7 +129,7 @@
       <validValue name="Sell">2</validValue>
     </enum>
 
-    <enum name="SecurityTradingStatus" encodingType="uint8">
+    <enum name="SecurityTradingStatus" encodingType="uInt8NULL">
       <validValue name="TradingHalt">2</validValue>
       <validValue name="Close">4</validValue>
       <validValue name="NewPriceIndication">15</validValue>
@@ -81,6 +137,54 @@
       <validValue name="NotAvailableForTrading">18</validValue>
       <validValue name="PreOpen">21</validValue>
     </enum>
+
+    <enum name="SecurityUpdateAction" encodingType="CHAR">
+      <validValue name="Add">A</validValue>
+      <validValue name="Delete">D</validValue>
+      <validValue name="Modify">M</validValue>
+    </enum>
+
+    <enum name="EventType" encodingType="uint8">
+      <validValue name="Activation">5</validValue>
+      <validValue name="LastEligibleTradeDate">7</validValue>
+    </enum>
+
+    <enum name="OpenCloseSettlFlag" encodingType="uInt8NULL">
+      <validValue name="DailyOpenPrice">0</validValue>
+      <validValue name="IndicativeOpeningPrice">5</validValue>
+    </enum>
+
+    <set name="SettlPriceType" encodingType="uint8">
+      <choice name="FinalDaily">0</choice>
+      <choice name="Actual">1</choice>
+      <choice name="Rounded">2</choice>
+      <choice name="Intraday">3</choice>
+      <choice name="ReservedBits">4</choice>
+      <choice name="NullValue">7</choice>
+    </set>
+
+    <set name="InstAttribValue" encodingType="uint32">
+      <choice name="ElectronicMatchEligible">0</choice>
+      <choice name="OrderCrossEligible">1</choice>
+      <choice name="BlockTradeEligible">2</choice>
+      <choice name="EFPEligible">3</choice>
+      <choice name="EBFEligible">4</choice>
+      <choice name="EFSEligible">5</choice>
+      <choice name="EFREligible">6</choice>
+      <choice name="OTCEligible">7</choice>
+      <choice name="iLinkIndicativeMassQuotingEligible">8</choice>
+      <choice name="NegativeStrikeEligible">9</choice>
+      <choice name="NegativePriceOutrightEligible">10</choice>
+      <choice name="IsFractional">11</choice>
+      <choice name="VolatilityQuotedOption">12</choice>
+      <choice name="RFQCrossEligible">13</choice>
+      <choice name="ZeroPriceOutrightEligible">14</choice>
+      <choice name="DecayingProductEligibility">15</choice>
+      <choice name="VariableProductEligibility">16</choice>
+      <choice name="DailyProductEligibility">17</choice>
+      <choice name="GTOrdersEligibility">18</choice>
+      <choice name="ImpliedMatchingEligibility">19</choice>
+    </set>
 
     <!-- MatchEventIndicator bit set -->
     <set name="MatchEventIndicator" encodingType="uint8">
@@ -141,5 +245,107 @@
     <field name="matchEventIndicator"    id="5799" type="MatchEventIndicator"   offset="22"/>
     <field name="securityTradingStatus"  id="326"  type="SecurityTradingStatus" offset="23"/>
     <!-- offsets 24-29 padding to blockLength 30 -->
+  </sbe:message>
+
+  <!--
+    Template 52: Snapshot Full Refresh (MBP), sent on the Snapshot feed.
+    Offsets and block lengths match CME's templates_FixBinary.xml exactly.
+    One message per instrument per loop; a late joiner or a handler that saw a
+    gap rebuilds an instrument's book from it, then resumes the incremental
+    feed after `rptSeq`.
+  -->
+  <sbe:message name="SnapshotFullRefresh" id="52" blockLength="59">
+    <field name="lastMsgSeqNumProcessed"  id="369"  type="uInt32"                offset="0"/>
+    <field name="totNumReports"           id="911"  type="uInt32"                offset="4"/>
+    <field name="securityId"              id="48"   type="Int32"                 offset="8"/>
+    <field name="rptSeq"                  id="83"   type="uInt32"                offset="12"/>
+    <field name="transactTime"            id="60"   type="uInt64"                offset="16"/>
+    <field name="lastUpdateTime"          id="779"  type="uInt64"                offset="24"/>
+    <field name="tradeDate"               id="75"   type="LocalMktDate"          offset="32"/>
+    <field name="mdSecurityTradingStatus" id="1682" type="SecurityTradingStatus" offset="34"/>
+    <field name="highLimitPrice"          id="1149" type="PRICENULL9"            offset="35"/>
+    <field name="lowLimitPrice"           id="1148" type="PRICENULL9"            offset="43"/>
+    <field name="maxPriceVariation"       id="1143" type="PRICENULL9"            offset="51"/>
+    <group name="MDEntries" id="268" dimensionType="groupSize" blockLength="22">
+      <field name="mdEntryPx"            id="270"  type="PRICENULL9"         offset="0"/>
+      <field name="mdEntrySize"          id="271"  type="Int32NULL"          offset="8"/>
+      <field name="numberOfOrders"       id="346"  type="Int32NULL"          offset="12"/>
+      <field name="mdPriceLevel"         id="1023" type="Int8NULL"           offset="16"/>
+      <field name="tradingReferenceDate" id="5796" type="LocalMktDate"       offset="17"/>
+      <field name="openCloseSettlFlag"   id="286"  type="OpenCloseSettlFlag" offset="19"/>
+      <field name="settlPriceType"       id="731"  type="SettlPriceType"     offset="20"/>
+      <field name="mdEntryType"          id="269"  type="MDEntryType"        offset="21"/>
+    </group>
+  </sbe:message>
+
+  <!--
+    Template 54: Instrument Definition (Future), sent on the Instrument Replay
+    feed. Layout matches CME's templates_FixBinary.xml byte for byte. This is
+    how a feed handler learns a security id's symbol, tick and channel from the
+    wire instead of from configuration.
+  -->
+  <sbe:message name="MDInstrumentDefinitionFuture" id="54" blockLength="224">
+    <field name="matchEventIndicator"     id="5799"  type="MatchEventIndicator"   offset="0"/>
+    <field name="totNumReports"           id="911"   type="uInt32NULL"            offset="1"/>
+    <field name="securityUpdateAction"    id="980"   type="SecurityUpdateAction"  offset="5"/>
+    <field name="lastUpdateTime"          id="779"   type="uInt64"                offset="6"/>
+    <field name="mdSecurityTradingStatus" id="1682"  type="SecurityTradingStatus" offset="14"/>
+    <field name="applId"                  id="1180"  type="Int16"                 offset="15"/>
+    <field name="marketSegmentId"         id="1300"  type="uInt8"                 offset="17"/>
+    <field name="underlyingProduct"       id="462"   type="uInt8"                 offset="18"/>
+    <field name="securityExchange"        id="207"   type="SecurityExchange"      offset="19"/>
+    <field name="securityGroup"           id="1151"  type="SecurityGroup"         offset="23"/>
+    <field name="asset"                   id="6937"  type="Asset"                 offset="29"/>
+    <field name="symbol"                  id="55"    type="Symbol"                offset="35"/>
+    <field name="securityId"              id="48"    type="Int32"                 offset="55"/>
+    <field name="securityIdSource"        id="22"    type="SecurityIDSource"/>
+    <field name="securityType"            id="167"   type="SecurityType"          offset="59"/>
+    <field name="cfiCode"                 id="461"   type="CFICode"               offset="65"/>
+    <field name="maturityMonthYear"       id="200"   type="MaturityMonthYear"     offset="71"/>
+    <field name="currency"                id="15"    type="Currency"              offset="76"/>
+    <field name="settlCurrency"           id="120"   type="Currency"              offset="79"/>
+    <field name="matchAlgorithm"          id="1142"  type="CHAR"                  offset="82"/>
+    <field name="minTradeVol"             id="562"   type="uInt32"                offset="83"/>
+    <field name="maxTradeVol"             id="1140"  type="uInt32"                offset="87"/>
+    <field name="minPriceIncrement"       id="969"   type="PRICE9"                offset="91"/>
+    <field name="displayFactor"           id="9787"  type="Decimal9"              offset="99"/>
+    <field name="mainFraction"            id="37702" type="uInt8NULL"             offset="107"/>
+    <field name="subFraction"             id="37703" type="uInt8NULL"             offset="108"/>
+    <field name="priceDisplayFormat"      id="9800"  type="uInt8NULL"             offset="109"/>
+    <field name="unitOfMeasure"           id="996"   type="UnitOfMeasure"         offset="110"/>
+    <field name="unitOfMeasureQty"        id="1147"  type="Decimal9NULL"          offset="140"/>
+    <field name="tradingReferencePrice"   id="1150"  type="PRICENULL9"            offset="148"/>
+    <field name="settlPriceType"          id="731"   type="SettlPriceType"        offset="156"/>
+    <field name="openInterestQty"         id="5792"  type="Int32NULL"             offset="157"/>
+    <field name="clearedVolume"           id="5791"  type="Int32NULL"             offset="161"/>
+    <field name="highLimitPrice"          id="1149"  type="PRICENULL9"            offset="165"/>
+    <field name="lowLimitPrice"           id="1148"  type="PRICENULL9"            offset="173"/>
+    <field name="maxPriceVariation"       id="1143"  type="PRICENULL9"            offset="181"/>
+    <field name="decayQuantity"           id="5818"  type="Int32NULL"             offset="189"/>
+    <field name="decayStartDate"          id="5819"  type="LocalMktDate"          offset="193"/>
+    <field name="originalContractSize"    id="5849"  type="Int32NULL"             offset="195"/>
+    <field name="contractMultiplier"      id="231"   type="Int32NULL"             offset="199"/>
+    <field name="contractMultiplierUnit"  id="1435"  type="Int8NULL"              offset="203"/>
+    <field name="flowScheduleType"        id="1439"  type="Int8NULL"              offset="204"/>
+    <field name="minPriceIncrementAmount" id="1146"  type="PRICENULL9"            offset="205"/>
+    <field name="userDefinedInstrument"   id="9779"  type="UserDefinedInstrument" offset="213"/>
+    <field name="tradingReferenceDate"    id="5796"  type="LocalMktDate"          offset="214"/>
+    <field name="instrumentGuid"          id="37513" type="uInt64NULL"            offset="216"/>
+    <group name="Events" id="864" dimensionType="groupSize" blockLength="9">
+      <field name="eventType" id="865"  type="EventType" offset="0"/>
+      <field name="eventTime" id="1145" type="uInt64"    offset="1"/>
+    </group>
+    <group name="MDFeedTypes" id="1141" dimensionType="groupSize" blockLength="4">
+      <field name="mdFeedType"  id="1022" type="MDFeedType" offset="0"/>
+      <field name="marketDepth" id="264"  type="Int8"       offset="3"/>
+    </group>
+    <group name="InstAttrib" id="870" dimensionType="groupSize" blockLength="4">
+      <field name="instAttribType"  id="871" type="InstAttribType"/>
+      <field name="instAttribValue" id="872" type="InstAttribValue" offset="0"/>
+    </group>
+    <group name="LotTypeRules" id="1234" dimensionType="groupSize" blockLength="5">
+      <field name="lotType"    id="1093" type="Int8"       offset="0"/>
+      <field name="minLotSize" id="1231" type="DecimalQty" offset="1"/>
+    </group>
   </sbe:message>
 </sbe:messageSchema>

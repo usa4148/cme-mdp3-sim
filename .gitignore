@@ -20,3 +20,14 @@ schema/config.xml
 
 # OS
 .DS_Store
+
+# Capture / launcher output
+pcaps/
+logs/
+*.pcap
+*.pcapng
+
+# Per-host secrets and settings (copy from the .example files)
+config.env
+capture.env
+deploy.env

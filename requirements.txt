@@ -1,6 +1,9 @@
 # Requires Python 3.14 or newer (enforced by pyver.py).
 #
-# Runtime dependency for the local dashboard host (app.py).
-# The simulator, codec, engine, consumer, timestamping, and tests use only the
-# Python standard library — no third-party packages required for those.
+# flask: the local dashboard host (app.py).
+# boto3: S3 (VAST) upload and download of captures — capture.py with config.env,
+#        replay.py s3: sources, s3store.py. Local pcap capture/replay don't need it.
+# The simulator, codec, engine, consumer, feed handler, ladder, timestamping and
+# tests use only the Python standard library.
 flask>=3.0
+boto3>=1.26
