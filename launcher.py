@@ -9,6 +9,8 @@ One entry point for the whole toolkit: `./mdp3 <command>`.
 
     ./mdp3 sim | consumer | ladder | capture | replay | products | pcap | s3 | dashboard …
                                               # any one tool, arguments passed through
+    ./mdp3 fetch-schema | fetch-config | fetch-cme
+                                              # CME's templates_FixBinary.xml / config.xml into schema/
     ./mdp3 test                               # every test suite
     ./mdp3 deploy [--service]                 # push to the VM (deploy.sh)
 
@@ -217,6 +219,9 @@ def main() -> int:
         return up(rest)
     if cmd == "test":
         return run_tests()
+    if cmd in ("fetch-schema", "fetch-config", "fetch-cme"):
+        flag = {"fetch-schema": ["--schema"], "fetch-config": ["--config"], "fetch-cme": []}[cmd]
+        os.execv(PY, [PY, os.path.join(HERE, "cme_files.py"), *flag, *rest])
     if cmd == "deploy":
         os.execv("/bin/bash", ["bash", os.path.join(HERE, "deploy.sh"), *rest])
     if cmd in TOOLS:

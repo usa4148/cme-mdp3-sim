@@ -72,9 +72,8 @@ def schema_path(name: str) -> str:
         path = os.path.join(SCHEMA_DIR, SCHEMA_FILES[name])
         if not os.path.exists(path):
             raise FileNotFoundError(
-                f"schema {name!r} needs {path}. CME publishes templates_FixBinary.xml "
-                f"at https://www.cmegroup.com/ftp/SBEFix/Production/Templates/ — "
-                f"or use --schema subset.")
+                f"schema {name!r} needs {path}: run ./mdp3 fetch-schema to get CME's "
+                f"templates_FixBinary.xml, or use --schema subset.")
         return path
     if os.path.exists(name):
         return name

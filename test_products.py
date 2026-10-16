@@ -1,6 +1,6 @@
 """
 Tests for the product chooser: contract specs, front-month dates, and parsing
-CME's config.xml (both the real file and the bundled extract).
+CME's config.xml (the real file when fetched) and the committed summary.
 
 Run: python3 test_products.py
 """
@@ -149,6 +149,34 @@ def test_tcp_connections_are_skipped():
         for f in p.feeds:
             assert f.ip, f
     print("ok  non-multicast connections are filtered out")
+
+
+def test_fetch_validates_before_replacing():
+    """cme_files: a good file installs; a bad download never replaces the old one."""
+    import cme_files
+    saved = dict(cme_files.FILES)
+    with tempfile.TemporaryDirectory() as d:
+        bad = os.path.join(d, "bad.xml")
+        with open(bad, "w") as fh:
+            fh.write("<configuration/>")
+        try:
+            cme_files.FILES["config"] = ("file://" + SAMPLE, "config.xml")
+            msg = cme_files.fetch("config", d)
+            assert "new" in msg and "9 futures channels" in msg, msg
+            before = open(os.path.join(d, "config.xml"), "rb").read()
+            cme_files.FILES["config"] = ("file://" + bad, "config.xml")
+            try:
+                cme_files.fetch("config", d)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError("an empty config was accepted")
+            assert open(os.path.join(d, "config.xml"), "rb").read() == before
+            assert [f for f in os.listdir(d) if f.startswith(".")] == [], "temp file left"
+        finally:
+            cme_files.FILES.clear()
+            cme_files.FILES.update(saved)
+    print("ok  fetch: validated before install; a bad download leaves the old file")
 
 
 def test_real_cme_config_if_downloaded():

@@ -11,8 +11,8 @@ can be pointed at:
     python3 products.py --show CL        # one product in detail
 
 Config file resolution, in order: an explicit path, then `$CME_CONFIG_XML`, then
-`schema/config.xml` (drop CME's real download there), then the bundled extract
-`schema/config.sample.xml`.
+`schema/config.xml` (CME's file: `./mdp3 fetch-config`), then the committed
+`schema/config.sample.xml`, a hand-written summary of the channels modelled here.
 
 A product code can appear on several channels — ES is listed on the E-mini
 futures channel and on two options channels. Since this simulator publishes
@@ -38,7 +38,7 @@ SAMPLE_CONFIG = os.path.join(_HERE, "schema", "config.sample.xml")
 
 
 def default_config_path() -> str:
-    """CME's real config.xml when it has been downloaded, else the extract."""
+    """CME's real config.xml when it has been fetched, else the committed summary."""
     env = os.environ.get("CME_CONFIG_XML")
     if env:
         return env
@@ -175,8 +175,8 @@ def load_products(config_path: str = None) -> tuple:
     if not os.path.exists(config_path):
         raise FileNotFoundError(
             f"CME channel config not found at {config_path}. Download config.xml "
-            f"from https://www.cmegroup.com/ftp/SBEFix/Production/Configuration/ "
-            f"(CME login required) to schema/config.xml, or pass another path.")
+            f"with ./mdp3 fetch-config (CME's FTP server) to schema/config.xml, "
+            f"or pass another path.")
     root = ET.parse(config_path).getroot()
     out, seen = [], set()
     for ch in root.iter("channel"):
