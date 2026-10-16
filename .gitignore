@@ -17,6 +17,7 @@ dashboard.html
 # CME's full config.xml — download it yourself (CME login required); the
 # committed schema/config.sample.xml is the fallback.
 schema/config.xml
+schema/templates_FixBinary.xml
 
 # OS
 .DS_Store

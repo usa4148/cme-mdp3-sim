@@ -608,8 +608,9 @@ and the drop zone are keyboard reachable.
 - **New product:** add a `ContractSpec` to `contracts.py` (tick, tick value,
   contract cycle, expiry rule, Yahoo symbol). Its channel and multicast feed come
   from `config.xml` automatically — nothing else to wire.
-- **Real channel addresses:** download CME's `config.xml` to `schema/config.xml`;
-  the committed extract is only a fallback.
+- **Real channel addresses:** `./mdp3 fetch-config` puts CME's `config.xml` in
+  `schema/`; the committed `config.sample.xml` is a hand-written summary of only
+  the channels this simulator models.
 
 ---
 

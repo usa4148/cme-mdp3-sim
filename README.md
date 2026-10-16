@@ -102,8 +102,8 @@ decoding with the wrong schema leaves bytes over or runs short. `decode()`
 refuses such a frame (it is counted, never applied), and `auto` uses the same
 check to settle on the schema a feed is using. `$MDP3_SCHEMA` sets the default.
 
-CME publishes `templates_FixBinary.xml` at
-<https://www.cmegroup.com/ftp/SBEFix/Production/Templates/>; drop it in `schema/`.
+Get CME's `templates_FixBinary.xml` with `./mdp3 fetch-schema` (see
+[Getting CME's files](#getting-cmes-files)); without it, every tool uses the subset.
 
 ## Layout
 
@@ -116,7 +116,8 @@ CME publishes `templates_FixBinary.xml` at
 | `contracts.py`      | Contract specs (tick, tick value, cycle) + front-month dates |
 | `products.py`       | Reads CME's `config.xml`; joins channels/feeds to contract specs |
 | `schema/config.xml` | CME's channel configuration (download it; gitignored) |
-| `schema/config.sample.xml` | Committed fallback extract of the above |
+| `schema/config.sample.xml` | Hand-written factual summary of the channels used (the fallback) |
+| `cme_files.py`      | `./mdp3 fetch-schema` / `fetch-config`: CME's files from its FTP server |
 | `settlement.py`     | Looks up & caches the prior session's close; derives the band |
 | `mdp3`, `launcher.py` | One entry point: `./mdp3 up` runs everything, `./mdp3 <tool>` runs one |
 | `simulator.py`      | Main sender — up to 4 products, every feed of their channels |
@@ -211,18 +212,29 @@ The dashboard stays single-product; its chooser switches between them.
 
 The dashboard has a **product chooser** in the header, grouped by asset class.
 
-### Getting CME's config.xml
+### Getting CME's files
 
-CME publishes it at
-<https://www.cmegroup.com/ftp/SBEFix/Production/Configuration/config.xml>, behind
-a CME Group login. Download it to **`schema/config.xml`** and every tool picks it
-up automatically (42 channels, ~5,000 products). It is gitignored — it is CME's
-file, not this repo's.
+This repository doesn't redistribute CME's files. Fetch them yourself, from
+CME's anonymous FTP server, into `schema/`:
 
-Without it, the committed **`schema/config.sample.xml`** is used: a small
-unmodified extract of the same file covering the 9 futures channels that host the
-products below. Both parse identically, so nothing changes when you swap them.
-Point elsewhere with `--config /path/to/config.xml` or `$CME_CONFIG_XML`.
+```bash
+./mdp3 fetch-cme        # both files below
+./mdp3 fetch-schema     # templates_FixBinary.xml — the SBE schema for --schema cme
+./mdp3 fetch-config     # config.xml — every channel, thousands of products
+```
+
+Each download is validated before it replaces anything: the schema must define
+templates 46/48/52/54, and the config must list futures channels. Both files are
+gitignored; they remain CME Group's, and their use is subject to CME's terms.
+The fetch uses `ftp.cmegroup.com`, not the cmegroup.com website, whose Data Terms
+of Use prohibit automated access.
+
+Without `config.xml`, the committed **`schema/config.sample.xml`** is used: a
+hand-written factual summary, not CME's file. It covers just the 9 futures
+channels that host the products below, with their product codes and the multicast
+addresses and ports of each channel's incremental, snapshot and instrument-replay
+feeds. With `config.xml` present it is preferred automatically; point elsewhere
+with `--config /path/to/config.xml` or `$CME_CONFIG_XML`.
 
 **Options channels are ignored.** A code like `ES` is listed on its futures
 channel (310) *and* on two options channels; only channels whose label says
