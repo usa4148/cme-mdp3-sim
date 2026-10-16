@@ -23,6 +23,7 @@ import time
 
 from feedhandler import KINDS, LIVE, FeedHandler, FeedSet
 from products import get_product, parse_product_list
+from receiver import parse_ifaces
 from wire import add_schema_argument, open_wire
 from pyver import require_python
 
@@ -249,7 +250,8 @@ def main() -> int:
                     help="product code(s), comma-separated or repeated, up to 4 (default ES)")
     ap.add_argument("--feeds", default="AB", choices=("AB", "A", "B"),
                     help="feed letters to join (default both: arbitration)")
-    ap.add_argument("--iface", default="0.0.0.0", help="local interface IP to receive on")
+    ap.add_argument("--iface", default="0.0.0.0",
+                    help="interface IP(s) to receive on, comma-separated")
     ap.add_argument("--fps", type=float, default=10.0, help="max redraw rate")
     ap.add_argument("--split", action="store_true", help="start in split view")
     add_schema_argument(ap, receive=True)
@@ -258,6 +260,7 @@ def main() -> int:
     args = ap.parse_args()
     try:
         codes = parse_product_list(args.product)
+        args.iface = ",".join(parse_ifaces(args.iface))
     except ValueError as e:
         ap.error(str(e))
 

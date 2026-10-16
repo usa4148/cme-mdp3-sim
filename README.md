@@ -428,6 +428,27 @@ create `config.env` (bucket credentials) and optionally `capture.env`
 unit reads both and restarts on failure. `journalctl --user -u mdp3-capture -f`
 shows each flush.
 
+### Choosing interfaces
+
+Every receiver (`capture.py`, `consumer.py`, `ladder.py`, the dashboard's live
+mode, `IFACE` in `capture.env`) takes one interface address or a comma-separated
+list, and joins each group on every one of them:
+
+```bash
+python3 capture.py --product ES --iface 127.0.0.1,192.168.1.20
+```
+
+Feeds a host sends to itself (the simulator or `replay.py` with TTL 0) arrive on
+**loopback**; feeds from other machines arrive on the **LAN interface**. A
+socket bound to its group only receives on interfaces it joined, so list both
+on a box that does both. Senders (`simulator.py`, `replay.py`) use one interface;
+under `./mdp3 up --iface a,b` they send on the first.
+
+A host firewall can drop inbound multicast on the LAN interface even when the
+joins are right. On RHEL-family hosts firewalld's `public` zone does by default;
+an administrator has to allow the feed ports (or the sending host) for LAN feeds
+to reach the capture.
+
 ## One command (`./mdp3`)
 
 `./mdp3 up` replaces the three terminals this used to take (capture, ladder,
