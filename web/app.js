@@ -1083,6 +1083,8 @@
     wireModes(); wireToolbar(); wireTuner(); wireCapture(); wireLive(); wireInspector(); wirePlayback();
     syncTuner();
     setMode(st.mode, false);
+    const at = parseInt(query.get("frame"), 10);       // deep link to a moment
+    if (st.mode !== "live" && at > 0) show(at);
     if (STATIC) setStatus("static snapshot · tuning previews in the page; feed panels show the baked session");
     else if (st.mode === "simulated" && st.sim.session) setStatus(`wire session · ${st.sim.session.schema.label}`);
   }
