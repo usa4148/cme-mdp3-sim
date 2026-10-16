@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MDP 3.0 Feed Simulator</title>
+<link rel="icon" href="favicon.ico">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="static/app.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="brand">
+      <h1 id="brandTitle">MDP 3.0 Feed Simulator</h1>
+      <div class="sub">CME MDP 3.0 · SBE over UDP multicast · <span id="schemaSub"></span></div>
+    </div>
+    <nav class="modes" role="tablist" aria-label="data source">
+      <button role="tab" data-mode="simulated" aria-selected="true">Simulated</button>
+      <button role="tab" data-mode="capture" aria-selected="false">Capture</button>
+      <button role="tab" data-mode="live" aria-selected="false">Live</button>
+    </nav>
+    <div class="price-box" aria-live="off">
+      <div class="lab" id="bigLab">Mid</div>
+      <div class="px mono" id="bigPx">—</div>
+      <div class="chg mono" id="bigChg">&nbsp;</div>
+    </div>
+  </header>
+
+  <div class="toolbar">
+    <label class="field">schema
+      <select id="schema" aria-label="SBE schema"></select></label>
+    <div class="products" id="productsBox" aria-label="products (up to four)">
+      <span class="field-lab">products</span>
+      <span id="productChips" class="pchips"></span>
+      <select id="productAdd" aria-label="add a product"></select>
+    </div>
+    <span class="status mono" id="status" role="status" aria-live="polite"></span>
+  </div>
+
+  <div id="banner" class="banner" role="alert" hidden></div>
+
+  <nav id="instTabs" class="inst-tabs" role="tablist" aria-label="instruments"></nav>
+
+  <!-- simulated: dynamics + feed knobs -->
+  <section class="panel tuner" id="simPanel">
+    <h2>Simulation <span class="hint" id="simHint">preview runs in the page · the server re-runs it through the real publisher and feed handler</span></h2>
+    <div class="tuner-body">
+      <div class="tuner-cols">
+        <fieldset class="tuner-grid">
+          <legend>Price dynamics</legend>
+          <div class="ctl"><div class="top"><span class="name">Volatility <em>σ</em></span><span class="val" id="vVolatility"></span></div>
+            <input type="range" id="cVolatility" min="0.05" max="3" step="0.05" aria-label="volatility">
+            <span class="desc">Std-dev of each step's shock, in ticks.</span></div>
+          <div class="ctl"><div class="top"><span class="name">Mean reversion <em>θ</em></span><span class="val" id="vReversion"></span></div>
+            <input type="range" id="cReversion" min="0" max="0.05" step="0.001" aria-label="mean reversion">
+            <span class="desc">Pull back toward the band center.</span></div>
+          <div class="ctl"><div class="top"><span class="name">Jump probability</span><span class="val" id="vJumpProb"></span></div>
+            <input type="range" id="cJumpProb" min="0" max="0.15" step="0.005" aria-label="jump probability">
+            <span class="desc">Chance per step of a gap move.</span></div>
+          <div class="ctl"><div class="top"><span class="name">Jump size</span><span class="val" id="vJumpSize"></span></div>
+            <input type="range" id="cJumpSize" min="1" max="20" step="0.5" aria-label="jump size">
+            <span class="desc">Mean magnitude of a jump, in ticks.</span></div>
+        </fieldset>
+        <fieldset class="tuner-grid">
+          <legend>Feeds</legend>
+          <div class="ctl"><div class="top"><span class="name">Loss on feed A</span><span class="val" id="vLossA"></span></div>
+            <input type="range" id="cLossA" min="0" max="0.5" step="0.01" aria-label="loss on feed A">
+            <span class="desc">Packets dropped before the wire. B covers them…</span></div>
+          <div class="ctl"><div class="top"><span class="name">Loss on feed B</span><span class="val" id="vLossB"></span></div>
+            <input type="range" id="cLossB" min="0" max="0.5" step="0.01" aria-label="loss on feed B">
+            <span class="desc">…unless both lose one: then a snapshot recovers it.</span></div>
+          <div class="ctl"><div class="top"><span class="name">Snapshot loop</span><span class="val" id="vSnap"></span></div>
+            <input type="range" id="cSnap" min="0" max="50" step="1" aria-label="snapshot interval in steps">
+            <span class="desc">Steps between snapshot loops (0 = no snapshot feed).</span></div>
+          <div class="ctl"><div class="top"><span class="name">Definition loop</span><span class="val" id="vDefs"></span></div>
+            <input type="range" id="cDefs" min="0" max="200" step="5" aria-label="definition interval in steps">
+            <span class="desc">Steps between instrument-definition loops.</span></div>
+        </fieldset>
+      </div>
+      <div class="tuner-foot">
+        <div class="presets" role="group" aria-label="presets">
+          <button data-preset="calm">Calm</button><button data-preset="normal">Normal</button>
+          <button data-preset="volatile">Volatile</button><button data-preset="jumpy">Jumpy</button>
+          <button data-preset="lossy">Lossy feeds</button>
+        </div>
+        <label class="mini start">start <span class="sym" id="startSym"></span>
+          <input id="cStart" class="px" type="number" step="any"></label>
+        <button id="resetStart">↺ prior close</button>
+        <label class="mini">band <input id="cLow" class="px" type="number" step="any" aria-label="band low"> –
+          <input id="cHigh" class="px" type="number" step="any" aria-label="band high"></label>
+        <label class="mini">feeds <select id="cFeeds"><option>AB</option><option>A</option><option>B</option></select></label>
+        <label class="mini">seed <input id="cSeed" class="seed" type="number" min="0"></label>
+        <button id="reseed">↻ new seed</button>
+        <span class="spacer"></span>
+        <a class="button" id="dlPcap" download>⇩ .pcap</a>
+        <button id="copyCli" class="primary">Copy simulator command</button>
+        <span class="toast" id="toast" aria-live="polite"></span>
+      </div>
+      <div class="cli mono" id="cliText"></div>
+    </div>
+  </section>
+
+  <!-- capture: pick or upload -->
+  <section class="panel" id="capPanel" hidden>
+    <h2>Captures <span class="hint" id="capHint"></span></h2>
+    <div class="cap-body">
+      <label class="drop" id="drop" tabindex="0">
+        <input type="file" id="capFile" accept=".pcap,.pcapng,.cap" hidden>
+        <b>Open a .pcap / .pcapng</b> — drop it here or click. Wireshark and tcpdump captures work,
+        including real CME lines.
+      </label>
+      <div class="cap-list" id="capList"></div>
+      <div class="cap-pick" id="capPick" hidden></div>
+    </div>
+  </section>
+
+  <!-- live: connect -->
+  <section class="panel" id="livePanel" hidden>
+    <h2>Live feed <span class="hint">the feed handler on this machine's multicast feeds</span></h2>
+    <div class="live-body">
+      <label class="mini">interface <input id="lIface" class="px" value="127.0.0.1" aria-label="interface"></label>
+      <label class="mini">feeds <select id="lFeeds"><option>AB</option><option>A</option><option>B</option></select></label>
+      <button id="lConnect" class="primary">Connect</button>
+      <span class="mono live-state" id="liveState">disconnected</span>
+      <span class="desc">Start a feed with <code>./mdp3 up</code>, <code>./mdp3 sim …</code> or <code>./mdp3 replay …</code>.</span>
+    </div>
+  </section>
+
+  <div class="grid">
+    <section class="panel">
+      <h2>DOM Ladder <span class="hint" id="ladderHint">bid · price · ask</span></h2>
+      <div class="ladder" id="ladder"></div>
+    </section>
+    <section class="panel">
+      <h2>Mid Price <span class="hint" id="chartHint"></span></h2>
+      <div class="chart-wrap">
+        <canvas id="chart" role="img" aria-label="mid price over time"></canvas>
+        <div class="legend">
+          <span><i class="swatch" style="background:var(--accent)"></i>mid</span>
+          <span><i class="swatch band"></i>band</span>
+          <span><i class="swatch" style="background:var(--muted)"></i>open / prior close</span>
+          <span><i class="dot"></i>trade</span>
+          <span><i class="swatch recov"></i>recovering</span>
+        </div>
+      </div>
+    </section>
+    <section class="panel">
+      <h2>Tape <span class="hint">decoded from the wire</span></h2>
+      <div class="tape" id="tape"></div>
+    </section>
+  </div>
+
+  <div class="stats" id="stats"></div>
+
+  <section class="panel">
+    <h2>Feeds <span class="hint" id="feedHint">incremental A/B · snapshot · instrument replay, per channel</span></h2>
+    <div class="feeds" id="feeds"></div>
+    <div class="feed-detail mono" id="feedDetail" aria-live="polite"></div>
+    <div class="events" id="events"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Template Inspector <span class="hint" id="inspHint"></span></h2>
+    <div class="insp">
+      <nav class="insp-tabs" id="inspTabs" role="tablist" aria-label="templates"></nav>
+      <div class="insp-body">
+        <div class="hex mono" id="hex"></div>
+        <div class="fields-wrap"><table class="fields mono" id="fields"></table></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>Instrument Definitions <span class="hint">template 54, as decoded</span></h2>
+    <div class="defs-wrap"><table class="defs mono" id="defs"></table></div>
+  </section>
+
+  <div class="controls" id="controls">
+    <button class="primary" id="play">▶ Play</button>
+    <div class="speed" role="group" aria-label="playback speed">
+      <button data-sp="1" aria-pressed="true">1×</button><button data-sp="2" aria-pressed="false">2×</button>
+      <button data-sp="4" aria-pressed="false">4×</button><button data-sp="8" aria-pressed="false">8×</button>
+    </div>
+    <input type="range" id="scrub" min="0" max="0" value="0" aria-label="timeline">
+    <div class="tcount mono" id="tcount">0 / 0</div>
+  </div>
+
+  <p class="note">Every book, trade and definition above was decoded from SBE bytes by the same feed
+    handler the terminal tools run — through A/B arbitration and snapshot recovery — not read from the
+    engine. Sessions: <code>session.py</code>; live: <code>live.py</code>; schema-neutral codec: <code>wire.py</code>.</p>
+</div>
+<script type="application/json" id="session-data">__SESSION_JSON__</script>
+<script src="static/engine.js"></script>
+<script src="static/app.js"></script>
+</body>
+</html>

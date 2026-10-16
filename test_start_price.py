@@ -287,14 +287,14 @@ def test_concurrent_cache_writes_lose_nothing():
 # ------------------------------------------------------------------ session ----
 def test_session_meta_carries_the_opening_price():
     sess = build_session(start=7772.50, steps=25, offline=True)
-    m = sess["meta"]
-    assert m["product"] == "ES" and m["symbol"].startswith("ES")
+    (m,) = sess["instruments"]
+    assert m["code"] == "ES" and m["symbol"].startswith("ES")
     assert m["start"] == 7772.50 and m["startSource"] == "explicit"
     assert (m["low"], m["high"]) == (7760.0, 7785.0), m
     assert m["band"] == 25.0
     assert sess["frames"], "session produced no frames"
     for f in sess["frames"]:                      # the walk stays inside the band
-        assert m["low"] <= f["mid"] <= m["high"], f
+        assert m["low"] <= f["i"][0]["m"] <= m["high"], f
     print(f"ok  build_session opens at {m['start']} in band [{m['low']}, {m['high']}]")
 
 

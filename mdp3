@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Entry point for the CME MDP 3.0 toolkit. See `./mdp3 help`.
+# Uses the project venv when present, else python3.14, else python3.
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PY="$DIR/.venv/bin/python"
+[ -x "$PY" ] || PY="$(command -v python3.14 || command -v python3)"
+exec "$PY" "$DIR/launcher.py" "$@"

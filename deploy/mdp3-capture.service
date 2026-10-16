@@ -1,0 +1,24 @@
+[Unit]
+Description=CME MDP 3.0 multicast capture -> S3 (pcap every 3s)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# %h = the running user's home. Deployed under that home by deploy.sh.
+WorkingDirectory=%h/cme-mdp3-sim
+# Products and interface come from capture.env (PRODUCTS=ES,NQ  IFACE=0.0.0.0);
+# the defaults below apply when it is absent.
+Environment=PRODUCTS=ES IFACE=0.0.0.0 INTERVAL=3
+EnvironmentFile=-%h/cme-mdp3-sim/capture.env
+ExecStart=%h/cme-mdp3-sim/.venv/bin/python %h/cme-mdp3-sim/capture.py --product ${PRODUCTS} --iface ${IFACE} --interval ${INTERVAL}
+# SIGTERM makes capture.py flush its current window before exiting
+KillSignal=SIGTERM
+TimeoutStopSec=15
+Restart=on-failure
+RestartSec=3
+# capture.py reads the S3 credentials from config.env itself; they are kept
+# out of this unit so they never land in journald or `systemctl show`.
+
+[Install]
+WantedBy=default.target
