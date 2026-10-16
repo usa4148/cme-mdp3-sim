@@ -152,11 +152,11 @@ def test_api_live_stream():
     def publish():
         tr = Transport("127.0.0.1", 0)
         pubs = build_publishers(build_instruments(["ES"], offline=True, seed=2), open_wire(SCHEMA), tr)
-        for p in pubs:
-            p.definition_loop()
         k = 0
         while not stop.is_set():
             for p in pubs:
+                if k % 25 == 0:              # repeat it, like the simulator: the viewer
+                    p.definition_loop()       # may join after the first loop
                 p.step()
                 if k % 10 == 0:
                     p.snapshot_loop()
