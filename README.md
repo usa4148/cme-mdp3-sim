@@ -24,6 +24,8 @@ updates around it, and the feed streams as genuine MDP 3.0 packets. The opening
 price is editable everywhere — `--start` on the CLI, a field in the dashboard,
 `?start=` on the URL.
 
+![The dashboard: four products on four channels with 8% loss on each feed — instrument tabs, the simulation panel, DOM ladder, mid-price walk, decoded tape and wire statistics](docs/images/dashboard.png)
+
 > **New here?** `./mdp3 up --products ES,NQ,CL,ZN` runs the simulator and opens a
 > live ladder on all four (keys 1–4 switch, `v` splits, `q` quits). The browser
 > dashboard: `python3.14 -m venv .venv && .venv/bin/pip install -r requirements.txt`,
@@ -482,6 +484,10 @@ LAN — it has no authentication, so only on a trusted network.
 - **Instrument definitions** — template 54 as decoded: symbol, security id,
   tick, decimals, tick value, contract size, maturity, limits, reference price.
 
+![Feed lanes for four channels: every packet on incremental A/B, snapshot A/B and instrument replay A/B, marked processed, duplicate, held or dropped, with the A/B tallies per channel](docs/images/dashboard-feeds.png)
+
+![Template inspector: a real MDIncrementalRefreshBook packet in CME's layout, hex bytes beside the field table with offsets, types and decoded values](docs/images/dashboard-inspector.png)
+
 **Tuning is instant and exact.** Moving a slider re-runs the walk in the page
 (`web/engine.js`), which ports CPython's Mersenne Twister, `gauss` and
 round-half-even, so the preview *is* the simulator's path for that seed — the
@@ -495,6 +501,7 @@ Every setting is in the URL, so a view can be bookmarked or shared:
 /?products=ES,NQ,CL,ZN&loss_a=0.05&loss_b=0.05
 /?products=CL&schema=subset&volatility=1.2&jump_prob=0.04&seed=7
 /?products=ES,CL&start=ES=7772.50,CL=92&band=ES=40
+/?products=ES,NQ,CL,ZN&loss_a=0.08&loss_b=0.08&frame=260   # open at step 260
 /?mode=capture&src=local:session.pcap
 /?mode=live&products=ES,NQ&iface=127.0.0.1
 ```
